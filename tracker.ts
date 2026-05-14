@@ -15,15 +15,22 @@ export interface TokenUsage {
   output: number
 }
 
+export interface ModelUsageEntry {
+  cost: number
+  tokens: TokenUsage
+}
+
 export interface SessionCostEntry {
   cost: number
   tokens: TokenUsage
   startedAt: string
+  models: Record<string, ModelUsageEntry>
 }
 
 export interface DailyEntry {
   cost: number
   tokens: TokenUsage
+  models: Record<string, ModelUsageEntry>
 }
 
 export interface CostData {
@@ -220,13 +227,18 @@ export function loadCostData(filePath?: string): CostData {
     // Migrate old format: daily entries that are plain numbers → DailyEntry
     for (const [key, value] of Object.entries(data.daily)) {
       if (typeof value === "number") {
-        ;(data.daily as any)[key] = { cost: value, tokens: emptyTokenUsage() }
+        ;(data.daily as any)[key] = { cost: value, tokens: emptyTokenUsage(), models: {} }
+      } else if (!value.models) {
+        value.models = {}
       }
     }
-    // Migrate old sessions without tokens
+    // Migrate old sessions without tokens or models
     for (const [key, value] of Object.entries(data.sessions)) {
       if (!value.tokens) {
         value.tokens = emptyTokenUsage()
+      }
+      if (!value.models) {
+        value.models = {}
       }
     }
     return data
@@ -257,7 +269,8 @@ export function addUsage(
   data: CostData,
   sessionId: string,
   cost: number,
-  tokens: TokenUsage
+  tokens: TokenUsage,
+  modelId?: string
 ): CostData {
   const today = getTodayKey()
 
@@ -267,19 +280,46 @@ export function addUsage(
       cost: 0,
       tokens: emptyTokenUsage(),
       startedAt: new Date().toISOString(),
+      models: {},
     }
   }
   data.sessions[sessionId].cost += cost
   data.sessions[sessionId].tokens.input += tokens.input
   data.sessions[sessionId].tokens.output += tokens.output
 
+  // Update session per-model
+  if (modelId) {
+    if (!data.sessions[sessionId].models) {
+      data.sessions[sessionId].models = {}
+    }
+    if (!data.sessions[sessionId].models[modelId]) {
+      data.sessions[sessionId].models[modelId] = { cost: 0, tokens: emptyTokenUsage() }
+    }
+    data.sessions[sessionId].models[modelId].cost += cost
+    data.sessions[sessionId].models[modelId].tokens.input += tokens.input
+    data.sessions[sessionId].models[modelId].tokens.output += tokens.output
+  }
+
   // Update daily
   if (!data.daily[today]) {
-    data.daily[today] = { cost: 0, tokens: emptyTokenUsage() }
+    data.daily[today] = { cost: 0, tokens: emptyTokenUsage(), models: {} }
   }
   data.daily[today].cost += cost
   data.daily[today].tokens.input += tokens.input
   data.daily[today].tokens.output += tokens.output
+
+  // Update daily per-model
+  if (modelId) {
+    if (!data.daily[today].models) {
+      data.daily[today].models = {}
+    }
+    if (!data.daily[today].models[modelId]) {
+      data.daily[today].models[modelId] = { cost: 0, tokens: emptyTokenUsage() }
+    }
+    data.daily[today].models[modelId].cost += cost
+    data.daily[today].models[modelId].tokens.input += tokens.input
+    data.daily[today].models[modelId].tokens.output += tokens.output
+  }
 
   return data
 }
@@ -371,6 +411,83 @@ export function getMonthSummary(data: CostData): PeriodSummary {
 
 export function getMonthCost(data: CostData): number {
   return getMonthSummary(data).cost
+}
+
+// --- Model Breakdown Queries ---
+
+function mergeModelUsage(
+  target: Record<string, ModelUsageEntry>,
+  source: Record<string, ModelUsageEntry>
+): void {
+  for (const [modelId, usage] of Object.entries(source)) {
+    if (!target[modelId]) {
+      target[modelId] = { cost: 0, tokens: emptyTokenUsage() }
+    }
+    target[modelId].cost += usage.cost
+    target[modelId].tokens.input += usage.tokens.input
+    target[modelId].tokens.output += usage.tokens.output
+  }
+}
+
+export function getSessionModelBreakdown(
+  data: CostData,
+  sessionId: string
+): Record<string, ModelUsageEntry> {
+  const entry = data.sessions[sessionId]
+  if (!entry || !entry.models) return {}
+  // Return a copy to avoid mutation
+  const result: Record<string, ModelUsageEntry> = {}
+  mergeModelUsage(result, entry.models)
+  return result
+}
+
+export function getTodayModelBreakdown(
+  data: CostData
+): Record<string, ModelUsageEntry> {
+  const entry = data.daily[getTodayKey()]
+  if (!entry || typeof entry === "number" || !entry.models) return {}
+  const result: Record<string, ModelUsageEntry> = {}
+  mergeModelUsage(result, entry.models)
+  return result
+}
+
+export function getWeekModelBreakdown(
+  data: CostData
+): Record<string, ModelUsageEntry> {
+  const today = new Date()
+  const dayOfWeek = today.getDay() || 7
+  const monday = new Date(today)
+  monday.setDate(today.getDate() - (dayOfWeek - 1))
+  monday.setHours(0, 0, 0, 0)
+
+  const result: Record<string, ModelUsageEntry> = {}
+  for (const [dateStr, entry] of Object.entries(data.daily)) {
+    const date = new Date(dateStr + "T00:00:00")
+    if (date >= monday && date <= today) {
+      if (typeof entry !== "number" && entry.models) {
+        mergeModelUsage(result, entry.models)
+      }
+    }
+  }
+  return result
+}
+
+export function getMonthModelBreakdown(
+  data: CostData
+): Record<string, ModelUsageEntry> {
+  const today = new Date()
+  const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1)
+
+  const result: Record<string, ModelUsageEntry> = {}
+  for (const [dateStr, entry] of Object.entries(data.daily)) {
+    const date = new Date(dateStr + "T00:00:00")
+    if (date >= firstOfMonth && date <= today) {
+      if (typeof entry !== "number" && entry.models) {
+        mergeModelUsage(result, entry.models)
+      }
+    }
+  }
+  return result
 }
 
 // --- Formatting ---

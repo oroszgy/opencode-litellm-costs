@@ -167,13 +167,15 @@ describe("persistence", () => {
     writeFileSync(testFile, JSON.stringify(oldData), "utf-8")
     const data = loadCostData(testFile)
 
-    // Should migrate to DailyEntry format
+    // Should migrate to DailyEntry format with models
     expect(data.daily["2026-05-14"]).toEqual({
       cost: 0.5,
       tokens: { input: 0, output: 0 },
+      models: {},
     })
-    // Should add tokens to session
+    // Should add tokens and models to session
     expect(data.sessions["s1"].tokens).toEqual({ input: 0, output: 0 })
+    expect(data.sessions["s1"].models).toEqual({})
   })
 
   test("saveCostData and loadCostData roundtrip", () => {
@@ -183,10 +185,15 @@ describe("persistence", () => {
           cost: 0.05,
           tokens: { input: 1000, output: 500 },
           startedAt: "2026-05-14T08:00:00.000Z",
+          models: { "claude-opus-4-6": { cost: 0.05, tokens: { input: 1000, output: 500 } } },
         },
       },
       daily: {
-        "2026-05-14": { cost: 0.05, tokens: { input: 1000, output: 500 } },
+        "2026-05-14": {
+          cost: 0.05,
+          tokens: { input: 1000, output: 500 },
+          models: { "claude-opus-4-6": { cost: 0.05, tokens: { input: 1000, output: 500 } } },
+        },
       },
     }
 
