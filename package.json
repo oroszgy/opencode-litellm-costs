@@ -1,6 +1,6 @@
 {
   "name": "opencode-litellm-costs",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "OpenCode plugin for tracking LiteLLM API costs per session, day, week, and month",
   "type": "module",
   "main": "index.ts",
