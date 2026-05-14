@@ -138,13 +138,13 @@ export const LiteLLMCostPlugin: Plugin = async ({ client }, options?) => {
 
       const modelPricing = findPricing(msg.modelID, msg.providerID)
       if (!modelPricing) {
-        client.app.log({
+        void client.app.log({
           body: {
             service: "litellm-cost-tracker",
             level: "debug",
             message: `No pricing found for model "${msg.modelID}" (provider: ${msg.providerID}). Tokens: in=${totalInput}, out=${totalOutput}`,
           },
-        })
+        }).catch(() => {})
         // Still track tokens even without cost
         costData = addUsage(costData, sessionId, 0, tokens, msg.modelID)
         saveCostData(costData)
