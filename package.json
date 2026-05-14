@@ -1,0 +1,17 @@
+{
+  "name": "opencode-litellm-cost-tracker",
+  "version": "0.1.0",
+  "description": "OpenCode plugin for tracking LiteLLM API costs per session, day, week, and month",
+  "type": "module",
+  "main": "index.ts",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@opencode-ai/plugin": "*",
+    "bun-types": "^1.3.14"
+  },
+  "keywords": ["opencode", "plugin", "litellm", "cost-tracking"],
+  "license": "MIT"
+}
