@@ -263,6 +263,41 @@ export function saveCostData(data: CostData, filePath?: string): void {
   }
 }
 
+/**
+ * Remove daily entries and sessions older than the given number of days.
+ * Defaults to 90 days. Returns a new CostData object with old entries removed.
+ */
+export function pruneOldData(data: CostData, maxAgeDays = 90): CostData {
+  const cutoff = new Date()
+  cutoff.setDate(cutoff.getDate() - maxAgeDays)
+  cutoff.setHours(0, 0, 0, 0)
+
+  // Prune daily entries
+  const daily: Record<string, DailyEntry> = {}
+  for (const [dateStr, entry] of Object.entries(data.daily)) {
+    const date = new Date(dateStr + "T00:00:00")
+    if (date >= cutoff) {
+      daily[dateStr] = entry
+    }
+  }
+
+  // Prune sessions older than cutoff
+  const sessions: Record<string, SessionCostEntry> = {}
+  for (const [id, entry] of Object.entries(data.sessions)) {
+    if (entry.startedAt) {
+      const sessionDate = new Date(entry.startedAt)
+      if (sessionDate >= cutoff) {
+        sessions[id] = entry
+      }
+    } else {
+      // Keep sessions without a date (can't determine age)
+      sessions[id] = entry
+    }
+  }
+
+  return { sessions, daily }
+}
+
 export function addUsage(
   data: CostData,
   sessionId: string,

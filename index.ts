@@ -8,6 +8,7 @@ import {
   calculateCost,
   loadCostData,
   saveCostData,
+  pruneOldData,
   addUsage,
   getSessionSummary,
   getTodaySummary,
@@ -68,8 +69,9 @@ export const LiteLLMCostPlugin: Plugin = async ({ client }, options?) => {
     })
   }
 
-  // Load persisted cost data from disk
-  let costData: CostData = loadCostData()
+  // Load persisted cost data from disk and prune entries older than 90 days
+  let costData: CostData = pruneOldData(loadCostData())
+  saveCostData(costData)
 
   // Track current session and processed messages
   let currentSessionId: string | null = null

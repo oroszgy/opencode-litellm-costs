@@ -6,6 +6,7 @@ import {
   calculateCost,
   loadCostData,
   saveCostData,
+  pruneOldData,
   addUsage,
   getSessionSummary,
   getSessionCost,
@@ -658,5 +659,91 @@ describe("loadCostData migration for models field", () => {
 
     expect(data.sessions["s1"].models["claude-opus-4-6"].cost).toBe(1.0)
     expect(data.daily["2026-05-14"].models["claude-opus-4-6"].tokens.input).toBe(5000)
+  })
+})
+
+// --- pruneOldData ---
+
+describe("pruneOldData", () => {
+  test("removes daily entries older than maxAgeDays", () => {
+    const today = new Date()
+    const todayKey = today.toISOString().slice(0, 10)
+    const oldDate = new Date(today)
+    oldDate.setDate(oldDate.getDate() - 100)
+    const oldKey = oldDate.toISOString().slice(0, 10)
+
+    const data: CostData = {
+      sessions: {},
+      daily: {
+        [todayKey]: { cost: 1.0, tokens: { input: 100, output: 50 }, models: {} },
+        [oldKey]: { cost: 5.0, tokens: { input: 500, output: 200 }, models: {} },
+      },
+    }
+
+    const pruned = pruneOldData(data, 90)
+    expect(pruned.daily[todayKey]).toBeDefined()
+    expect(pruned.daily[oldKey]).toBeUndefined()
+  })
+
+  test("removes sessions older than maxAgeDays", () => {
+    const recentDate = new Date()
+    recentDate.setDate(recentDate.getDate() - 10)
+    const oldDate = new Date()
+    oldDate.setDate(oldDate.getDate() - 100)
+
+    const data: CostData = {
+      sessions: {
+        "recent": {
+          cost: 1.0,
+          tokens: { input: 100, output: 50 },
+          startedAt: recentDate.toISOString(),
+          models: {},
+        },
+        "old": {
+          cost: 5.0,
+          tokens: { input: 500, output: 200 },
+          startedAt: oldDate.toISOString(),
+          models: {},
+        },
+      },
+      daily: {},
+    }
+
+    const pruned = pruneOldData(data, 90)
+    expect(pruned.sessions["recent"]).toBeDefined()
+    expect(pruned.sessions["old"]).toBeUndefined()
+  })
+
+  test("keeps sessions without a startedAt date", () => {
+    const data: CostData = {
+      sessions: {
+        "no-date": {
+          cost: 1.0,
+          tokens: { input: 100, output: 50 },
+          startedAt: "",
+          models: {},
+        },
+      },
+      daily: {},
+    }
+
+    const pruned = pruneOldData(data, 90)
+    expect(pruned.sessions["no-date"]).toBeDefined()
+  })
+
+  test("keeps entries within maxAgeDays boundary", () => {
+    const boundaryDate = new Date()
+    boundaryDate.setDate(boundaryDate.getDate() - 89)
+    const boundaryKey = boundaryDate.toISOString().slice(0, 10)
+
+    const data: CostData = {
+      sessions: {},
+      daily: {
+        [boundaryKey]: { cost: 2.0, tokens: { input: 200, output: 100 }, models: {} },
+      },
+    }
+
+    const pruned = pruneOldData(data, 90)
+    expect(pruned.daily[boundaryKey]).toBeDefined()
   })
 })
