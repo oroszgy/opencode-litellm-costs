@@ -1,47 +1,102 @@
 # opencode-litellm-cost-tracker
 
-An [OpenCode](https://opencode.ai) plugin that tracks LiteLLM API costs per session, day, week, and month.
+An [OpenCode](https://opencode.ai) plugin that tracks LiteLLM API costs and token usage per session, day, week, and month. Also queries your LiteLLM proxy for server-side spend reporting.
 
-OpenCode's built-in cost tracking can fail when using a LiteLLM proxy. This plugin fetches model pricing directly from your LiteLLM instance and calculates costs from token usage on every turn.
+## Why?
+
+OpenCode's built-in cost tracking can fail when using a LiteLLM proxy. This plugin:
+
+1. Fetches model pricing directly from your LiteLLM instance
+2. Calculates costs from token usage on every completed turn
+3. Tracks input/output token counts alongside costs
+4. Queries the LiteLLM server for actual recorded spend per API key
 
 ## Features
 
-- Tracks costs per **session**, **today**, **this week**, and **this month**
-- Fetches model pricing from LiteLLM's `/model/info` endpoint at startup
-- Falls back to OpenCode's built-in `cost` field when it's available (non-zero)
-- Persists cost data across restarts in `~/.config/opencode/plugin-cost.json`
-- Configurable alert threshold triggers a one-time warning toast per session
-- `/cost` slash command for on-demand cost summary
-- Graceful error handling — never crashes the TUI
+- **Local cost tracking** — calculates costs from token counts using cached model pricing
+- **Token tracking** — records input and output tokens per session/day/week/month
+- **Server-side spend** — queries LiteLLM's `/key/info` and `/spend/logs` for actual billed costs
+- **Two commands** — `/cost` for local tracking, `/spend` for server-reported data
+- **Configurable alert** — one-time warning toast when session cost crosses a threshold
+- **Persistent storage** — survives restarts via `~/.config/opencode/plugin-cost.json`
+- **Graceful degradation** — never crashes the TUI, fails silently with debug logging
 
 ## Installation
 
-### Local (auto-discovered)
-
-Place or symlink the plugin into your project's `.opencode/plugins/` directory:
+### Step 1: Clone the plugin
 
 ```bash
-# From your project root
-mkdir -p .opencode/plugins
-ln -s /path/to/opencode-litellm-cost-tracker/index.ts .opencode/plugins/litellm-cost-tracker.ts
+git clone https://github.com/YOUR_USER/opencode-litellm-cost-tracker.git
+cd opencode-litellm-cost-tracker
+bun install
 ```
 
-### Via opencode.json
+### Step 2: Register with OpenCode
 
-Add to your `opencode.json`:
+You have three options:
+
+#### Option A: Global plugin directory (recommended for all projects)
+
+Symlink into the global plugin directory:
+
+```bash
+mkdir -p ~/.config/opencode/plugins
+ln -sf /absolute/path/to/opencode-litellm-cost-tracker/index.ts \
+  ~/.config/opencode/plugins/litellm-cost-tracker.ts
+```
+
+#### Option B: Per-project plugin directory
+
+Symlink into a specific project's `.opencode/plugins/`:
+
+```bash
+mkdir -p /path/to/your/project/.opencode/plugins
+ln -sf /absolute/path/to/opencode-litellm-cost-tracker/index.ts \
+  /path/to/your/project/.opencode/plugins/litellm-cost-tracker.ts
+```
+
+#### Option C: Explicit in opencode.json
+
+Add to your `~/.config/opencode/opencode.json` (global) or project-level `opencode.json`:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
-    ["./path/to/opencode-litellm-cost-tracker/index.ts", {
-      "baseUrl": "http://localhost:4000",
+    ["/absolute/path/to/opencode-litellm-cost-tracker/index.ts", {
+      "baseURL": "https://your-litellm-proxy.example.com/v1",
       "apiKey": "sk-your-litellm-key",
-      "alertThreshold": 1.0
+      "alertThreshold": 5.0
     }]
   ]
 }
 ```
+
+### Step 3: Set up slash commands
+
+Create the command files in the global config directory:
+
+```bash
+mkdir -p ~/.config/opencode/commands
+
+cat > ~/.config/opencode/commands/cost.md << 'EOF'
+---
+description: Show LiteLLM API cost breakdown (session, today, week, month)
+---
+Call the cost tool to display the current LiteLLM API spending summary.
+EOF
+
+cat > ~/.config/opencode/commands/spend.md << 'EOF'
+---
+description: Fetch actual LiteLLM server-side spend for your API key
+---
+Call the spend tool to show the server-reported usage and costs from LiteLLM for today, this week, this month, and lifetime.
+EOF
+```
+
+### Step 4: Restart OpenCode
+
+Plugin and command changes only take effect after restarting OpenCode.
 
 ## Configuration
 
@@ -49,77 +104,126 @@ Configuration is resolved in order: **plugin options** > **environment variables
 
 | Parameter | Env Variable | Default | Description |
 |-----------|-------------|---------|-------------|
-| `baseUrl` | `LITELLM_BASE_URL` | `http://localhost:4000` | LiteLLM proxy base URL |
+| `baseUrl` or `baseURL` | `LITELLM_BASE_URL` | `http://localhost:4000` | LiteLLM proxy base URL |
 | `apiKey` | `LITELLM_API_KEY` | _(required)_ | Bearer token for LiteLLM API |
-| `alertThreshold` | `LITELLM_COST_ALERT_THRESHOLD` | `1.0` | Session cost (in USD) that triggers a warning toast |
+| `alertThreshold` | `LITELLM_COST_ALERT_THRESHOLD` | `1.0` | Session cost (USD) that triggers a warning toast |
 
 ### Environment variables
 
 ```bash
-export LITELLM_BASE_URL="http://localhost:4000"
+export LITELLM_BASE_URL="https://your-litellm-proxy.example.com/v1"
 export LITELLM_API_KEY="sk-your-litellm-key"
 export LITELLM_COST_ALERT_THRESHOLD="5.0"
 ```
 
+### Inline plugin options (in opencode.json)
+
+```json
+{
+  "plugin": [
+    ["/path/to/opencode-litellm-cost-tracker/index.ts", {
+      "baseURL": "https://your-litellm-proxy.example.com/v1",
+      "apiKey": "sk-your-litellm-key",
+      "alertThreshold": 5.0
+    }]
+  ]
+}
+```
+
+Both `baseUrl` and `baseURL` are accepted (for consistency with other OpenCode provider configs that use `baseURL`).
+
 ## Usage
 
-### `/cost` command
+### `/cost` — Local Cost & Token Tracking
 
-Type `/cost` in the OpenCode TUI to get a cost summary:
+Type `/cost` in the OpenCode TUI to see locally-tracked costs and tokens:
 
 ```
-## LiteLLM Cost Summary
+## LiteLLM Cost Summary (Local Tracking)
 
-| Period       | Cost          |
-|--------------|---------------|
-| This Session | $0.05         |
-| Today        | $1.23         |
-| This Week    | $4.56         |
-| This Month   | $12.34        |
+| Period       | Cost          | Tokens In    | Tokens Out   |
+|--------------|---------------|--------------|--------------|
+| This Session | $0.05         | 12.5K        | 3.2K         |
+| Today        | $1.23         | 245K         | 62K          |
+| This Week    | $4.56         | 920K         | 230K         |
+| This Month   | $12.34        | 2.4M         | 610K         |
 
 Session started: 5/14/2026, 8:00:00 AM
 Alert threshold: $1.00
 Models with pricing: 12
 ```
 
-To enable the `/cost` command, create `.opencode/commands/cost.md`:
+This data is calculated locally from token counts and cached model pricing. It updates after every completed assistant message.
 
-```markdown
----
-description: Show LiteLLM API cost breakdown (session, today, week, month)
----
-Call the cost tool to display the current LiteLLM API spending summary.
+### `/spend` — Server-Side Spend from LiteLLM
+
+Type `/spend` to query the LiteLLM proxy for the actual recorded spend associated with your API key:
+
+```
+## LiteLLM Server Spend (Key: sk-Gg...uGhA)
+
+| Period     | Spend         |
+|------------|---------------|
+| Today      | $1.45         |
+| This Week  | $5.23         |
+| This Month | $18.90        |
+| Lifetime   | $42.50        |
+
+Budget: $100.00 | Used: 42.5%
+
+### Per-Model (Lifetime)
+| Model                         | Spend         |
+|-------------------------------|---------------|
+| claude-opus-4-6               | $30.00        |
+| claude-sonnet-4-6             | $12.50        |
 ```
 
-### Alert toast
+This queries the LiteLLM API endpoints:
+- `GET /key/info` — lifetime spend, budget, per-model breakdown
+- `GET /spend/logs?api_key=...&start_date=...&end_date=...` — daily spend for time periods
 
-When the session cost crosses the configured threshold, a one-time warning toast is displayed:
+### Alert Toast
+
+When the session cost crosses the configured threshold (default `$1.00`), a one-time warning toast appears:
 
 ```
 Cost alert: session has reached $1.05
 ```
 
-This only fires once per session to avoid notification fatigue. It resets when you start a new session (`/new`).
+This fires once per session and resets when you start a new session (`/new`).
 
 ## How It Works
 
+### Local Tracking (`/cost`)
+
 1. **Startup**: Fetches model pricing from `GET {baseUrl}/model/info` with `Authorization: Bearer {apiKey}`
-2. **Per turn**: Listens for `message.updated` events. When an `AssistantMessage` is completed:
+2. **Per turn**: Listens for `message.updated` events. When an `AssistantMessage` completes:
    - If the built-in `cost` field is > 0, uses it directly
    - Otherwise, calculates cost from `tokens.input + tokens.cache.read` and `tokens.output + tokens.reasoning` using the pricing cache
+   - Always records token counts regardless of cost availability
 3. **Deduplication**: Each message is processed exactly once (tracked by message ID)
-4. **Persistence**: Writes accumulated costs to `~/.config/opencode/plugin-cost.json` after every turn
+4. **Persistence**: Writes to `~/.config/opencode/plugin-cost.json` after every turn
 
-### Cost file format
+### Server Spend (`/spend`)
+
+Queries LiteLLM's spend tracking endpoints live. This reflects what the proxy actually billed — useful for verifying local estimates against server records.
+
+### Cost File Format
 
 ```json
 {
   "sessions": {
-    "session-id-1": { "cost": 0.05, "startedAt": "2026-05-14T08:00:00.000Z" }
+    "session-id-1": {
+      "cost": 0.05,
+      "tokens": { "input": 12000, "output": 3000 },
+      "startedAt": "2026-05-14T08:00:00.000Z"
+    }
   },
   "daily": {
-    "2026-05-14": 1.23,
-    "2026-05-13": 0.45
+    "2026-05-14": {
+      "cost": 1.23,
+      "tokens": { "input": 245000, "output": 62000 }
+    }
   }
 }
 ```
@@ -132,7 +236,8 @@ Weekly and monthly costs are computed on-the-fly by summing relevant daily entri
 |---------|----------|
 | LiteLLM unreachable at startup | Logs warning, plugin loads but cannot calculate costs |
 | API key missing | Logs warning, plugin loads in degraded mode |
-| No pricing found for a model | Logs debug message, skips that message |
+| No pricing found for a model | Logs debug, tokens still tracked but cost is 0 |
+| `/key/info` or `/spend/logs` fails | `/spend` shows available data, notes what couldn't be fetched |
 | Persistence file corrupted/missing | Starts fresh with empty data |
 | Persistence write fails | Continues with in-memory data |
 
@@ -166,9 +271,9 @@ bunx tsc --noEmit
 
 ```
 opencode-litellm-cost-tracker/
-├── index.ts           # Plugin entry point, event hooks, cost tool
-├── tracker.ts         # Pricing fetch, cost math, file persistence
-├── index.test.ts      # Integration tests for plugin hooks
+├── index.ts           # Plugin entry point, event hooks, cost + spend tools
+├── tracker.ts         # Pricing fetch, cost math, LiteLLM API, file persistence
+├── index.test.ts      # Integration tests for plugin hooks and tools
 ├── tracker.test.ts    # Unit tests for tracker functions
 ├── package.json
 ├── tsconfig.json
