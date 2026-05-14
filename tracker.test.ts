@@ -246,10 +246,11 @@ describe("addUsage", () => {
           cost: 0.05,
           tokens: { input: 1000, output: 500 },
           startedAt: "2026-05-14T08:00:00.000Z",
+          models: {},
         },
       },
       daily: {
-        "2026-05-14": { cost: 0.05, tokens: { input: 1000, output: 500 } },
+        "2026-05-14": { cost: 0.05, tokens: { input: 1000, output: 500 }, models: {} },
       },
     }
 
@@ -287,7 +288,7 @@ describe("getSessionSummary", () => {
   test("returns session cost and tokens", () => {
     const data: CostData = {
       sessions: {
-        "s1": { cost: 1.23, tokens: { input: 5000, output: 2000 }, startedAt: "" },
+        "s1": { cost: 1.23, tokens: { input: 5000, output: 2000 }, startedAt: "", models: {} },
       },
       daily: {},
     }
