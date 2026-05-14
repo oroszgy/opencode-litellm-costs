@@ -303,20 +303,41 @@ export const LiteLLMCostPlugin: Plugin = async ({ client }, options?) => {
             }
           }
 
-          // Per-model breakdown from key info
-          const modelSpend = keyInfo?.info?.model_spend
+          // Per-model breakdown: prefer key info, fall back to lifetime spend logs
+          let modelSpend = keyInfo?.info?.model_spend
+          if (!modelSpend || Object.keys(modelSpend).length === 0) {
+            // Fetch lifetime spend logs from key creation date
+            const keyCreatedAt = keyInfo?.info?.created_at
+            const lifetimeStart = keyCreatedAt
+              ? keyCreatedAt.slice(0, 10)
+              : "2020-01-01"
+            const lifetimeLogs = await fetchSpendLogs(config, lifetimeStart, endDate)
+            const aggregated: Record<string, number> = {}
+            for (const entry of lifetimeLogs) {
+              const models = (entry as { models?: Record<string, number> }).models
+              if (models) {
+                for (const [model, spend] of Object.entries(models)) {
+                  aggregated[model] = (aggregated[model] || 0) + spend
+                }
+              }
+            }
+            if (Object.keys(aggregated).length > 0) {
+              modelSpend = aggregated
+            }
+          }
+
           if (modelSpend && Object.keys(modelSpend).length > 0) {
             lines.push("")
             lines.push("### Per-Model (Lifetime)")
-            lines.push("| Model                         | Spend         |")
-            lines.push("|-------------------------------|---------------|")
+            lines.push("| Model                                    | Spend         |")
+            lines.push("|------------------------------------------|---------------|")
 
             const sorted = Object.entries(modelSpend).sort(
               ([, a], [, b]) => b - a
             )
             for (const [model, spend] of sorted) {
               lines.push(
-                `| ${model.padEnd(29)} | ${formatCost(spend).padEnd(13)} |`
+                `| ${model.padEnd(40)} | ${formatCost(spend).padEnd(13)} |`
               )
             }
           }
@@ -442,7 +463,17 @@ export const LiteLLMCostPlugin: Plugin = async ({ client }, options?) => {
           const todayModels = aggregateModels(todayLogs as LogEntry[])
           const weekModels = aggregateModels(weekLogs as LogEntry[])
           const monthModels = aggregateModels(monthLogs as LogEntry[])
-          const lifetimeModels = keyInfo?.info?.model_spend || {}
+
+          // Lifetime per-model: prefer key info, fall back to spend logs from key creation
+          let lifetimeModels = keyInfo?.info?.model_spend || {}
+          if (Object.keys(lifetimeModels).length === 0) {
+            const keyCreatedAt = keyInfo?.info?.created_at
+            const lifetimeStart = keyCreatedAt
+              ? keyCreatedAt.slice(0, 10)
+              : "2020-01-01"
+            const lifetimeLogs = await fetchSpendLogs(config, lifetimeStart, endDate)
+            lifetimeModels = aggregateModels(lifetimeLogs as LogEntry[])
+          }
 
           // Collect all model names across all periods
           const allModels = new Set<string>([

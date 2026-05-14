@@ -125,6 +125,7 @@ export interface KeyInfoResponse {
     expires?: string | null
     budget_duration?: string | null
     budget_reset_at?: string | null
+    created_at?: string | null
   }
 }
 

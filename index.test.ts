@@ -683,4 +683,121 @@ describe("LiteLLMCostPlugin", () => {
     expect(result).toContain("$30.00")
     expect(result).toContain("$20.00")
   })
+
+  test("spend-models falls back to spend logs when model_spend is empty", async () => {
+    globalThis.fetch = mock((url: string) => {
+      if (url.includes("/model/info")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_PRICING_RESPONSE),
+        } as Response)
+      }
+      if (url.includes("/key/info")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            key: "test",
+            info: {
+              spend: 100,
+              model_spend: {},  // Empty! Should trigger fallback
+              created_at: "2025-08-13T13:03:18.536000+00:00",
+            },
+          }),
+        } as Response)
+      }
+      if (url.includes("/spend/logs")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([
+            { startTime: "2026-05-14", spend: 12.0, models: { "claude-opus": 8.0, "claude-sonnet": 4.0 } },
+            { startTime: "2026-05-13", spend: 10.0, models: { "claude-opus": 7.0, "claude-sonnet": 3.0 } },
+          ]),
+        } as Response)
+      }
+      return Promise.reject(new Error(`Unexpected: ${url}`))
+    }) as any
+
+    const client = createMockClient()
+    const { LiteLLMCostPlugin } = await import("./index")
+
+    const hooks = await LiteLLMCostPlugin(
+      {
+        client: client as any,
+        project: {} as any,
+        directory: tmpDir,
+        worktree: tmpDir,
+        experimental_workspace: { register: () => {} },
+        serverUrl: new URL("http://localhost:4096"),
+        $: {} as any,
+      },
+      { baseUrl: "http://localhost:4000", apiKey: "sk-test-key-1234567890" }
+    )
+
+    const result = await hooks.tool!["spend-models"].execute({} as any, toolCtx)
+
+    // Should show model data from spend logs fallback
+    expect(result).toContain("claude-opus")
+    expect(result).toContain("claude-sonnet")
+    // Lifetime aggregated from logs: claude-opus = 8+7 = $15, claude-sonnet = 4+3 = $7
+    expect(result).toContain("$15.00")
+    expect(result).toContain("$7.00")
+  })
+
+  test("spend tool falls back to spend logs for per-model when model_spend is empty", async () => {
+    globalThis.fetch = mock((url: string) => {
+      if (url.includes("/model/info")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_PRICING_RESPONSE),
+        } as Response)
+      }
+      if (url.includes("/key/info")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            key: "test",
+            info: {
+              spend: 100,
+              model_spend: {},
+              created_at: "2025-01-01T00:00:00Z",
+            },
+          }),
+        } as Response)
+      }
+      if (url.includes("/spend/logs")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([
+            { startTime: "2026-05-14", spend: 5.0, models: { "model-x": 3.0, "model-y": 2.0 } },
+          ]),
+        } as Response)
+      }
+      return Promise.reject(new Error(`Unexpected: ${url}`))
+    }) as any
+
+    const client = createMockClient()
+    const { LiteLLMCostPlugin } = await import("./index")
+
+    const hooks = await LiteLLMCostPlugin(
+      {
+        client: client as any,
+        project: {} as any,
+        directory: tmpDir,
+        worktree: tmpDir,
+        experimental_workspace: { register: () => {} },
+        serverUrl: new URL("http://localhost:4096"),
+        $: {} as any,
+      },
+      { baseUrl: "http://localhost:4000", apiKey: "sk-test-key-1234567890" }
+    )
+
+    const result = await hooks.tool!.spend.execute({} as any, toolCtx)
+
+    // Should show per-model section from spend logs fallback
+    expect(result).toContain("Per-Model (Lifetime)")
+    expect(result).toContain("model-x")
+    expect(result).toContain("model-y")
+    expect(result).toContain("$3.00")
+    expect(result).toContain("$2.00")
+  })
 })
