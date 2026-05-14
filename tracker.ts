@@ -10,14 +10,25 @@ export interface PricingInfo {
 
 export type PricingMap = Map<string, PricingInfo>
 
+export interface TokenUsage {
+  input: number
+  output: number
+}
+
 export interface SessionCostEntry {
   cost: number
+  tokens: TokenUsage
   startedAt: string
+}
+
+export interface DailyEntry {
+  cost: number
+  tokens: TokenUsage
 }
 
 export interface CostData {
   sessions: Record<string, SessionCostEntry>
-  daily: Record<string, number> // ISO date string → accumulated cost
+  daily: Record<string, DailyEntry> // ISO date string → accumulated cost + tokens
 }
 
 export interface PluginConfig {
@@ -94,6 +105,74 @@ export async function fetchModelPricing(
   return pricing
 }
 
+// --- LiteLLM Spend API ---
+
+export interface KeyInfoResponse {
+  key: string
+  info: {
+    key_name?: string
+    key_alias?: string
+    spend?: number
+    max_budget?: number | null
+    model_spend?: Record<string, number>
+    expires?: string | null
+    budget_duration?: string | null
+    budget_reset_at?: string | null
+  }
+}
+
+export interface SpendLogEntry {
+  startTime: string
+  spend: number
+  [key: string]: unknown
+}
+
+export async function fetchKeyInfo(
+  config: PluginConfig
+): Promise<KeyInfoResponse | null> {
+  try {
+    const url = `${config.baseUrl.replace(/\/$/, "")}/key/info`
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+    })
+    if (!response.ok) return null
+    return (await response.json()) as KeyInfoResponse
+  } catch {
+    return null
+  }
+}
+
+export async function fetchSpendLogs(
+  config: PluginConfig,
+  startDate: string,
+  endDate: string
+): Promise<SpendLogEntry[]> {
+  try {
+    const baseUrl = config.baseUrl.replace(/\/$/, "")
+    const params = new URLSearchParams({
+      api_key: config.apiKey,
+      start_date: startDate,
+      end_date: endDate,
+    })
+    const url = `${baseUrl}/spend/logs?${params.toString()}`
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+    })
+    if (!response.ok) return []
+    const data = await response.json()
+    if (Array.isArray(data)) return data as SpendLogEntry[]
+    return []
+  } catch {
+    return []
+  }
+}
+
 // --- Cost Calculation ---
 
 export function calculateCost(
@@ -120,6 +199,10 @@ export function getCostFilePath(): string {
   return COST_FILE_PATH
 }
 
+function emptyTokenUsage(): TokenUsage {
+  return { input: 0, output: 0 }
+}
+
 function emptyCostData(): CostData {
   return { sessions: {}, daily: {} }
 }
@@ -133,6 +216,18 @@ export function loadCostData(filePath?: string): CostData {
     // Basic validation
     if (!data.sessions || !data.daily) {
       return emptyCostData()
+    }
+    // Migrate old format: daily entries that are plain numbers → DailyEntry
+    for (const [key, value] of Object.entries(data.daily)) {
+      if (typeof value === "number") {
+        ;(data.daily as any)[key] = { cost: value, tokens: emptyTokenUsage() }
+      }
+    }
+    // Migrate old sessions without tokens
+    for (const [key, value] of Object.entries(data.sessions)) {
+      if (!value.tokens) {
+        value.tokens = emptyTokenUsage()
+      }
     }
     return data
   } catch {
@@ -158,68 +253,124 @@ export function saveCostData(data: CostData, filePath?: string): void {
   }
 }
 
+export function addUsage(
+  data: CostData,
+  sessionId: string,
+  cost: number,
+  tokens: TokenUsage
+): CostData {
+  const today = getTodayKey()
+
+  // Update session
+  if (!data.sessions[sessionId]) {
+    data.sessions[sessionId] = {
+      cost: 0,
+      tokens: emptyTokenUsage(),
+      startedAt: new Date().toISOString(),
+    }
+  }
+  data.sessions[sessionId].cost += cost
+  data.sessions[sessionId].tokens.input += tokens.input
+  data.sessions[sessionId].tokens.output += tokens.output
+
+  // Update daily
+  if (!data.daily[today]) {
+    data.daily[today] = { cost: 0, tokens: emptyTokenUsage() }
+  }
+  data.daily[today].cost += cost
+  data.daily[today].tokens.input += tokens.input
+  data.daily[today].tokens.output += tokens.output
+
+  return data
+}
+
+// Keep backward compat — addCost delegates to addUsage with zero tokens
 export function addCost(
   data: CostData,
   sessionId: string,
   cost: number
 ): CostData {
-  const today = getTodayKey()
-
-  // Update session cost
-  if (!data.sessions[sessionId]) {
-    data.sessions[sessionId] = {
-      cost: 0,
-      startedAt: new Date().toISOString(),
-    }
-  }
-  data.sessions[sessionId].cost += cost
-
-  // Update daily cost
-  data.daily[today] = (data.daily[today] || 0) + cost
-
-  return data
+  return addUsage(data, sessionId, cost, emptyTokenUsage())
 }
 
 // --- Period Queries ---
+
+export interface PeriodSummary {
+  cost: number
+  tokens: TokenUsage
+}
+
+export function getSessionSummary(data: CostData, sessionId: string): PeriodSummary {
+  const entry = data.sessions[sessionId]
+  if (!entry) return { cost: 0, tokens: emptyTokenUsage() }
+  return { cost: entry.cost, tokens: entry.tokens }
+}
 
 export function getSessionCost(data: CostData, sessionId: string): number {
   return data.sessions[sessionId]?.cost || 0
 }
 
-export function getTodayCost(data: CostData): number {
-  return data.daily[getTodayKey()] || 0
+export function getTodaySummary(data: CostData): PeriodSummary {
+  const entry = data.daily[getTodayKey()]
+  if (!entry) return { cost: 0, tokens: emptyTokenUsage() }
+  return { cost: entry.cost, tokens: entry.tokens }
 }
 
-export function getWeekCost(data: CostData): number {
+export function getTodayCost(data: CostData): number {
+  const entry = data.daily[getTodayKey()]
+  if (!entry) return 0
+  return typeof entry === "number" ? entry : entry.cost
+}
+
+export function getWeekSummary(data: CostData): PeriodSummary {
   const today = new Date()
-  // ISO week: Monday is day 1
-  const dayOfWeek = today.getDay() || 7 // Convert Sunday (0) to 7
+  const dayOfWeek = today.getDay() || 7
   const monday = new Date(today)
   monday.setDate(today.getDate() - (dayOfWeek - 1))
   monday.setHours(0, 0, 0, 0)
 
-  let total = 0
-  for (const [dateStr, cost] of Object.entries(data.daily)) {
+  const result: PeriodSummary = { cost: 0, tokens: emptyTokenUsage() }
+  for (const [dateStr, entry] of Object.entries(data.daily)) {
     const date = new Date(dateStr + "T00:00:00")
     if (date >= monday && date <= today) {
-      total += cost
+      if (typeof entry === "number") {
+        result.cost += entry
+      } else {
+        result.cost += entry.cost
+        result.tokens.input += entry.tokens.input
+        result.tokens.output += entry.tokens.output
+      }
     }
   }
-  return total
+  return result
 }
 
-export function getMonthCost(data: CostData): number {
+export function getWeekCost(data: CostData): number {
+  return getWeekSummary(data).cost
+}
+
+export function getMonthSummary(data: CostData): PeriodSummary {
   const today = new Date()
   const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1)
 
-  let total = 0
-  for (const [dateStr, cost] of Object.entries(data.daily)) {
+  const result: PeriodSummary = { cost: 0, tokens: emptyTokenUsage() }
+  for (const [dateStr, entry] of Object.entries(data.daily)) {
     const date = new Date(dateStr + "T00:00:00")
     if (date >= firstOfMonth && date <= today) {
-      total += cost
+      if (typeof entry === "number") {
+        result.cost += entry
+      } else {
+        result.cost += entry.cost
+        result.tokens.input += entry.tokens.input
+        result.tokens.output += entry.tokens.output
+      }
     }
   }
-  return total
+  return result
+}
+
+export function getMonthCost(data: CostData): number {
+  return getMonthSummary(data).cost
 }
 
 // --- Formatting ---
@@ -230,9 +381,36 @@ export function formatCost(amount: number): string {
   return `$${amount.toFixed(2)}`
 }
 
-// --- Helpers ---
+export function formatTokens(count: number): string {
+  if (count === 0) return "0"
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`
+  if (count >= 10_000) return `${(count / 1_000).toFixed(0)}K`
+  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`
+  return count.toLocaleString()
+}
 
-function getTodayKey(): string {
+export function maskApiKey(key: string): string {
+  if (key.length <= 8) return "****"
+  return `${key.slice(0, 4)}...${key.slice(-4)}`
+}
+
+// --- Date Helpers ---
+
+export function getTodayKey(): string {
   const now = new Date()
-  return now.toISOString().slice(0, 10) // "2026-05-14"
+  return now.toISOString().slice(0, 10)
+}
+
+export function getWeekStartKey(): string {
+  const today = new Date()
+  const dayOfWeek = today.getDay() || 7
+  const monday = new Date(today)
+  monday.setDate(today.getDate() - (dayOfWeek - 1))
+  return monday.toISOString().slice(0, 10)
+}
+
+export function getMonthStartKey(): string {
+  const today = new Date()
+  const first = new Date(today.getFullYear(), today.getMonth(), 1)
+  return first.toISOString().slice(0, 10)
 }

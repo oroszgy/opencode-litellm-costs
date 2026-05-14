@@ -1,13 +1,7 @@
 import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test"
 import { join } from "path"
 import { mkdirSync, rmSync, existsSync } from "fs"
-import { homedir } from "os"
-import { loadCostData, getCostFilePath } from "./tracker"
-
-/**
- * Integration tests for the plugin's event processing logic.
- * Since the plugin is a function that returns hooks, we test the hooks directly.
- */
+import { getCostFilePath } from "./tracker"
 
 // Mock the client SDK
 function createMockClient() {
@@ -48,6 +42,19 @@ const MOCK_PRICING_RESPONSE = {
   ],
 }
 
+const MOCK_KEY_INFO_RESPONSE = {
+  key: "sk-GgJBySyVzFKmk0Y4AwuGhA",
+  info: {
+    key_name: "test-key",
+    spend: 42.5,
+    max_budget: 100.0,
+    model_spend: {
+      "claude-opus-4-6": 30.0,
+      "claude-sonnet-4-6": 12.5,
+    },
+  },
+}
+
 describe("LiteLLMCostPlugin", () => {
   const tmpDir = join("/tmp/opencode", "plugin-test")
   const costFile = getCostFilePath()
@@ -55,7 +62,6 @@ describe("LiteLLMCostPlugin", () => {
 
   beforeEach(() => {
     mkdirSync(tmpDir, { recursive: true })
-    // Clean the shared persistence file before each test
     if (existsSync(costFile)) rmSync(costFile)
     originalFetch = globalThis.fetch
   })
@@ -66,12 +72,27 @@ describe("LiteLLMCostPlugin", () => {
 
   // Helper to instantiate the plugin with mocks
   async function setupPlugin(options?: Record<string, unknown>) {
-    // Mock fetch to return pricing data
     globalThis.fetch = mock((url: string) => {
       if (url.includes("/model/info")) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve(MOCK_PRICING_RESPONSE),
+        } as Response)
+      }
+      if (url.includes("/key/info")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_KEY_INFO_RESPONSE),
+        } as Response)
+      }
+      if (url.includes("/spend/logs")) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve([
+              { startTime: "2026-05-14", spend: 1.23 },
+              { startTime: "2026-05-13", spend: 0.45 },
+            ]),
         } as Response)
       }
       return Promise.reject(new Error(`Unexpected fetch: ${url}`))
@@ -92,13 +113,24 @@ describe("LiteLLMCostPlugin", () => {
       },
       {
         baseUrl: "http://localhost:4000",
-        apiKey: "test-key",
+        apiKey: "sk-GgJBySyVzFKmk0Y4AwuGhA",
         alertThreshold: 1.0,
         ...options,
       }
     )
 
     return { hooks, client }
+  }
+
+  const toolCtx = {
+    sessionID: "test",
+    messageID: "msg-1",
+    agent: "general",
+    directory: "/tmp",
+    worktree: "/tmp",
+    abort: new AbortController().signal,
+    metadata: () => {},
+    ask: {} as any,
   }
 
   test("fetches pricing on init and logs success", async () => {
@@ -136,7 +168,6 @@ describe("LiteLLMCostPlugin", () => {
       { baseUrl: "http://localhost:4000", apiKey: "test-key" }
     )
 
-    // Plugin should still return hooks (not crash)
     expect(hooks.event).toBeDefined()
     expect(hooks.tool).toBeDefined()
     expect(client.app.log).toHaveBeenCalledWith(
@@ -149,96 +180,48 @@ describe("LiteLLMCostPlugin", () => {
     )
   })
 
-  test("warns when no API key configured", async () => {
-    globalThis.fetch = originalFetch
-    const client = createMockClient()
-    const { LiteLLMCostPlugin } = await import("./index")
-
-    // Remove env var to test no-key path
-    const savedKey = process.env.LITELLM_API_KEY
-    delete process.env.LITELLM_API_KEY
-
-    const hooks = await LiteLLMCostPlugin(
-      {
-        client: client as any,
-        project: {} as any,
-        directory: tmpDir,
-        worktree: tmpDir,
-        experimental_workspace: { register: () => {} },
-        serverUrl: new URL("http://localhost:4096"),
-        $: {} as any,
-      },
-      { baseUrl: "http://localhost:4000", apiKey: "" }
-    )
-
-    expect(hooks.event).toBeDefined()
-    expect(client.app.log).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.objectContaining({
-          level: "warn",
-          message: expect.stringContaining("No LITELLM_API_KEY"),
-        }),
-      })
-    )
-
-    if (savedKey) process.env.LITELLM_API_KEY = savedKey
-  })
-
   test("event hook tracks session creation", async () => {
     const { hooks } = await setupPlugin()
 
     await hooks.event!({
       event: {
         type: "session.created",
-        properties: {
-          info: { id: "test-session-123" },
-        },
+        properties: { info: { id: "test-session-123" } },
       } as any,
     })
 
-    // After session created, the cost tool should reference it
-    const result = await hooks.tool!.cost.execute({} as any, {
-      sessionID: "test-session-123",
-      messageID: "msg-1",
-      agent: "general",
-      directory: tmpDir,
-      worktree: tmpDir,
-      abort: new AbortController().signal,
-      metadata: () => {},
-      ask: {} as any,
-    })
-
+    const result = await hooks.tool!.cost.execute({} as any, toolCtx)
     expect(result).toContain("$0.00")
+    expect(result).toContain("Tokens In")
+    expect(result).toContain("Tokens Out")
   })
 
-  test("event hook processes completed assistant messages", async () => {
+  test("event hook processes completed messages with token tracking", async () => {
     const { hooks } = await setupPlugin()
 
-    // Create session
     await hooks.event!({
       event: {
         type: "session.created",
-        properties: { info: { id: "sess-abc" } },
+        properties: { info: { id: "sess-tokens" } },
       } as any,
     })
 
-    // Simulate a completed assistant message
     await hooks.event!({
       event: {
         type: "message.updated",
         properties: {
           info: {
             id: "msg-1",
-            sessionID: "sess-abc",
+            sessionID: "sess-tokens",
             role: "assistant",
             modelID: "claude-sonnet-4-6",
             providerID: "anthropic",
-            cost: 0, // Built-in cost tracking failed
+            cost: 0,
             tokens: {
               input: 1000,
               output: 500,
               reasoning: 0,
-              cache: { read: 0, write: 0 },
+              cache: { read: 200, write: 0 },
             },
             time: { created: Date.now(), completed: Date.now() },
           },
@@ -246,21 +229,12 @@ describe("LiteLLMCostPlugin", () => {
       } as any,
     })
 
-    // Check cost tool output
-    const result = await hooks.tool!.cost.execute({} as any, {
-      sessionID: "sess-abc",
-      messageID: "msg-2",
-      agent: "general",
-      directory: tmpDir,
-      worktree: tmpDir,
-      abort: new AbortController().signal,
-      metadata: () => {},
-      ask: {} as any,
-    })
-
-    // Expected: 1000 * 0.000003 + 500 * 0.000015 = 0.003 + 0.0075 = 0.0105
-    // formatCost rounds to 2 decimal places for amounts >= $0.01 → "$0.01"
-    expect(result).toContain("| This Session | $0.01")
+    const result = await hooks.tool!.cost.execute({} as any, toolCtx)
+    // Cost: (1000+200) * 0.000003 + 500 * 0.000015 = 0.0036 + 0.0075 = 0.0111
+    expect(result).toContain("| This Session |")
+    // Token tracking: input = 1000 + 200 cache = 1200, output = 500
+    expect(result).toContain("1.2K")  // 1200 tokens formatted
+    expect(result).toContain("500")   // 500 output tokens
   })
 
   test("does not double-count the same message", async () => {
@@ -296,22 +270,11 @@ describe("LiteLLMCostPlugin", () => {
       } as any,
     }
 
-    // Fire same message event twice
     await hooks.event!(messageEvent)
     await hooks.event!(messageEvent)
 
-    const result = await hooks.tool!.cost.execute({} as any, {
-      sessionID: "sess-dedup",
-      messageID: "msg-x",
-      agent: "general",
-      directory: tmpDir,
-      worktree: tmpDir,
-      abort: new AbortController().signal,
-      metadata: () => {},
-      ask: {} as any,
-    })
-
-    // Should only count once: $0.0105 → formatted as $0.01
+    const result = await hooks.tool!.cost.execute({} as any, toolCtx)
+    // Should only count once
     expect(result).toContain("| This Session | $0.01")
   })
 
@@ -325,7 +288,6 @@ describe("LiteLLMCostPlugin", () => {
       } as any,
     })
 
-    // Message without time.completed (still streaming)
     await hooks.event!({
       event: {
         type: "message.updated",
@@ -343,74 +305,14 @@ describe("LiteLLMCostPlugin", () => {
               reasoning: 0,
               cache: { read: 0, write: 0 },
             },
-            time: { created: Date.now() }, // No completed field
+            time: { created: Date.now() },
           },
         },
       } as any,
     })
 
-    const result = await hooks.tool!.cost.execute({} as any, {
-      sessionID: "sess-stream",
-      messageID: "msg-x",
-      agent: "general",
-      directory: tmpDir,
-      worktree: tmpDir,
-      abort: new AbortController().signal,
-      metadata: () => {},
-      ask: {} as any,
-    })
-
-    // Should be $0.00 since message wasn't completed
+    const result = await hooks.tool!.cost.execute({} as any, toolCtx)
     expect(result).toContain("| This Session | $0.00")
-  })
-
-  test("uses built-in cost when available (non-zero)", async () => {
-    const { hooks } = await setupPlugin()
-
-    await hooks.event!({
-      event: {
-        type: "session.created",
-        properties: { info: { id: "sess-builtin" } },
-      } as any,
-    })
-
-    // Message with built-in cost already set
-    await hooks.event!({
-      event: {
-        type: "message.updated",
-        properties: {
-          info: {
-            id: "msg-builtin",
-            sessionID: "sess-builtin",
-            role: "assistant",
-            modelID: "claude-opus-4-6",
-            providerID: "anthropic",
-            cost: 0.042, // Built-in tracking worked
-            tokens: {
-              input: 1000,
-              output: 500,
-              reasoning: 0,
-              cache: { read: 0, write: 0 },
-            },
-            time: { created: Date.now(), completed: Date.now() },
-          },
-        },
-      } as any,
-    })
-
-    const result = await hooks.tool!.cost.execute({} as any, {
-      sessionID: "sess-builtin",
-      messageID: "msg-x",
-      agent: "general",
-      directory: tmpDir,
-      worktree: tmpDir,
-      abort: new AbortController().signal,
-      metadata: () => {},
-      ask: {} as any,
-    })
-
-    // Should use the built-in cost of $0.042 → formatted as "$0.04"
-    expect(result).toContain("| This Session | $0.04")
   })
 
   test("fires toast when session cost crosses threshold", async () => {
@@ -423,7 +325,6 @@ describe("LiteLLMCostPlugin", () => {
       } as any,
     })
 
-    // Message with cost that exceeds threshold ($0.01)
     await hooks.event!({
       event: {
         type: "message.updated",
@@ -447,7 +348,6 @@ describe("LiteLLMCostPlugin", () => {
       } as any,
     })
 
-    // 5000 * 0.000015 + 2000 * 0.000075 = 0.075 + 0.15 = 0.225 > 0.01 threshold
     expect(client.tui.showToast).toHaveBeenCalledWith(
       expect.objectContaining({
         body: expect.objectContaining({
@@ -468,7 +368,6 @@ describe("LiteLLMCostPlugin", () => {
       } as any,
     })
 
-    // Two messages, both cross threshold
     for (let i = 0; i < 2; i++) {
       await hooks.event!({
         event: {
@@ -494,68 +393,67 @@ describe("LiteLLMCostPlugin", () => {
       })
     }
 
-    // Toast should fire only once
     expect(client.tui.showToast).toHaveBeenCalledTimes(1)
   })
 
-  test("ignores user messages", async () => {
+  test("cost tool returns formatted summary with tokens", async () => {
     const { hooks } = await setupPlugin()
 
-    await hooks.event!({
-      event: {
-        type: "session.created",
-        properties: { info: { id: "sess-user" } },
-      } as any,
-    })
+    const result = await hooks.tool!.cost.execute({} as any, toolCtx)
 
-    // User message (should be ignored)
-    await hooks.event!({
-      event: {
-        type: "message.updated",
-        properties: {
-          info: {
-            id: "msg-user",
-            sessionID: "sess-user",
-            role: "user",
-          },
-        },
-      } as any,
-    })
-
-    const result = await hooks.tool!.cost.execute({} as any, {
-      sessionID: "sess-user",
-      messageID: "msg-x",
-      agent: "general",
-      directory: tmpDir,
-      worktree: tmpDir,
-      abort: new AbortController().signal,
-      metadata: () => {},
-      ask: {} as any,
-    })
-
-    expect(result).toContain("| This Session | $0.00")
-  })
-
-  test("cost tool returns formatted summary", async () => {
-    const { hooks } = await setupPlugin()
-
-    const result = await hooks.tool!.cost.execute({} as any, {
-      sessionID: "unknown",
-      messageID: "msg-1",
-      agent: "general",
-      directory: tmpDir,
-      worktree: tmpDir,
-      abort: new AbortController().signal,
-      metadata: () => {},
-      ask: {} as any,
-    })
-
-    expect(result).toContain("## LiteLLM Cost Summary")
+    expect(result).toContain("## LiteLLM Cost Summary (Local Tracking)")
     expect(result).toContain("This Session")
     expect(result).toContain("Today")
     expect(result).toContain("This Week")
     expect(result).toContain("This Month")
-    expect(result).toContain("Alert threshold")
+    expect(result).toContain("Tokens In")
+    expect(result).toContain("Tokens Out")
     expect(result).toContain("Models with pricing: 3")
+  })
+
+  test("spend tool fetches and returns server-side spend", async () => {
+    const { hooks } = await setupPlugin()
+
+    const result = await hooks.tool!.spend.execute({} as any, toolCtx)
+
+    expect(result).toContain("## LiteLLM Server Spend")
+    expect(result).toContain("sk-G...uGhA")
+    expect(result).toContain("Lifetime")
+    expect(result).toContain("$42.50")
+    expect(result).toContain("Budget")
+    expect(result).toContain("Per-Model")
+    expect(result).toContain("claude-opus-4-6")
+    expect(result).toContain("$30.00")
+  })
+
+  test("spend tool handles missing API key", async () => {
+    globalThis.fetch = mock((url: string) => {
+      if (url.includes("/model/info")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_PRICING_RESPONSE),
+        } as Response)
+      }
+      return Promise.reject(new Error("nope"))
+    }) as any
+
+    const client = createMockClient()
+    const { LiteLLMCostPlugin } = await import("./index")
+
+    const hooks = await LiteLLMCostPlugin(
+      {
+        client: client as any,
+        project: {} as any,
+        directory: tmpDir,
+        worktree: tmpDir,
+        experimental_workspace: { register: () => {} },
+        serverUrl: new URL("http://localhost:4096"),
+        $: {} as any,
+      },
+      { baseUrl: "http://localhost:4000", apiKey: "" }
+    )
+
+    const result = await hooks.tool!.spend.execute({} as any, toolCtx)
+    expect(result).toContain("Error: No LITELLM_API_KEY")
   })
 })

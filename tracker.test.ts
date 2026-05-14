@@ -1,20 +1,33 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test"
 import { join } from "path"
-import { mkdirSync, rmSync, existsSync, readFileSync } from "fs"
+import { mkdirSync, rmSync, existsSync, writeFileSync } from "fs"
 import {
   resolveConfig,
   calculateCost,
   loadCostData,
   saveCostData,
-  addCost,
+  addUsage,
+  getSessionSummary,
   getSessionCost,
+  getTodaySummary,
   getTodayCost,
+  getWeekSummary,
   getWeekCost,
+  getMonthSummary,
   getMonthCost,
   formatCost,
+  formatTokens,
+  maskApiKey,
   type CostData,
   type PricingInfo,
+  type DailyEntry,
+  type TokenUsage,
 } from "./tracker"
+
+// Helper to create a daily entry
+function daily(cost: number, input = 0, output = 0): DailyEntry {
+  return { cost, tokens: { input, output } }
+}
 
 // --- resolveConfig ---
 
@@ -90,13 +103,12 @@ describe("resolveConfig", () => {
 
 describe("calculateCost", () => {
   const pricing: PricingInfo = {
-    inputPricePerToken: 0.000003, // $3/1M tokens
-    outputPricePerToken: 0.000015, // $15/1M tokens
+    inputPricePerToken: 0.000003,
+    outputPricePerToken: 0.000015,
   }
 
   test("calculates cost from token counts", () => {
     const cost = calculateCost(1000, 500, pricing)
-    // 1000 * 0.000003 + 500 * 0.000015 = 0.003 + 0.0075 = 0.0105
     expect(cost).toBeCloseTo(0.0105, 6)
   })
 
@@ -115,7 +127,7 @@ describe("calculateCost", () => {
   })
 })
 
-// --- Persistence (loadCostData / saveCostData) ---
+// --- Persistence ---
 
 describe("persistence", () => {
   const tmpDir = join("/tmp/opencode", "cost-tracker-test")
@@ -136,23 +148,46 @@ describe("persistence", () => {
   })
 
   test("loadCostData returns empty data for invalid JSON", () => {
-    require("fs").writeFileSync(testFile, "not json", "utf-8")
+    writeFileSync(testFile, "not json", "utf-8")
     const data = loadCostData(testFile)
     expect(data).toEqual({ sessions: {}, daily: {} })
   })
 
   test("loadCostData returns empty data for missing fields", () => {
-    require("fs").writeFileSync(testFile, '{"foo": "bar"}', "utf-8")
+    writeFileSync(testFile, '{"foo": "bar"}', "utf-8")
     const data = loadCostData(testFile)
     expect(data).toEqual({ sessions: {}, daily: {} })
+  })
+
+  test("loadCostData migrates old number-only daily format", () => {
+    const oldData = {
+      sessions: { "s1": { cost: 0.5, startedAt: "2026-05-14T00:00:00Z" } },
+      daily: { "2026-05-14": 0.5 },
+    }
+    writeFileSync(testFile, JSON.stringify(oldData), "utf-8")
+    const data = loadCostData(testFile)
+
+    // Should migrate to DailyEntry format
+    expect(data.daily["2026-05-14"]).toEqual({
+      cost: 0.5,
+      tokens: { input: 0, output: 0 },
+    })
+    // Should add tokens to session
+    expect(data.sessions["s1"].tokens).toEqual({ input: 0, output: 0 })
   })
 
   test("saveCostData and loadCostData roundtrip", () => {
     const data: CostData = {
       sessions: {
-        "sess-1": { cost: 0.05, startedAt: "2026-05-14T08:00:00.000Z" },
+        "sess-1": {
+          cost: 0.05,
+          tokens: { input: 1000, output: 500 },
+          startedAt: "2026-05-14T08:00:00.000Z",
+        },
       },
-      daily: { "2026-05-14": 0.05 },
+      daily: {
+        "2026-05-14": { cost: 0.05, tokens: { input: 1000, output: 500 } },
+      },
     }
 
     saveCostData(data, testFile)
@@ -163,125 +198,163 @@ describe("persistence", () => {
 
   test("saveCostData creates parent directories", () => {
     const nestedFile = join(tmpDir, "nested", "deep", "cost.json")
-    const data: CostData = { sessions: {}, daily: { "2026-05-14": 0.01 } }
+    const data: CostData = {
+      sessions: {},
+      daily: { "2026-05-14": daily(0.01, 100, 50) },
+    }
 
     saveCostData(data, nestedFile)
     expect(existsSync(nestedFile)).toBe(true)
 
     const loaded = loadCostData(nestedFile)
-    expect(loaded.daily["2026-05-14"]).toBe(0.01)
+    expect(loaded.daily["2026-05-14"].cost).toBe(0.01)
+    expect(loaded.daily["2026-05-14"].tokens.input).toBe(100)
 
-    // Cleanup
     rmSync(join(tmpDir, "nested"), { recursive: true })
   })
 })
 
-// --- addCost ---
+// --- addUsage ---
 
-describe("addCost", () => {
-  test("adds cost to a new session", () => {
+describe("addUsage", () => {
+  test("adds cost and tokens to a new session", () => {
     let data: CostData = { sessions: {}, daily: {} }
-    data = addCost(data, "sess-1", 0.05)
+    data = addUsage(data, "sess-1", 0.05, { input: 1000, output: 500 })
 
     expect(data.sessions["sess-1"].cost).toBeCloseTo(0.05, 6)
+    expect(data.sessions["sess-1"].tokens.input).toBe(1000)
+    expect(data.sessions["sess-1"].tokens.output).toBe(500)
     expect(data.sessions["sess-1"].startedAt).toBeDefined()
   })
 
-  test("accumulates cost on existing session", () => {
+  test("accumulates cost and tokens on existing session", () => {
     let data: CostData = {
       sessions: {
-        "sess-1": { cost: 0.05, startedAt: "2026-05-14T08:00:00.000Z" },
+        "sess-1": {
+          cost: 0.05,
+          tokens: { input: 1000, output: 500 },
+          startedAt: "2026-05-14T08:00:00.000Z",
+        },
       },
-      daily: { "2026-05-14": 0.05 },
+      daily: {
+        "2026-05-14": { cost: 0.05, tokens: { input: 1000, output: 500 } },
+      },
     }
 
-    data = addCost(data, "sess-1", 0.03)
+    data = addUsage(data, "sess-1", 0.03, { input: 800, output: 300 })
 
     expect(data.sessions["sess-1"].cost).toBeCloseTo(0.08, 6)
-    // startedAt should not change
+    expect(data.sessions["sess-1"].tokens.input).toBe(1800)
+    expect(data.sessions["sess-1"].tokens.output).toBe(800)
     expect(data.sessions["sess-1"].startedAt).toBe("2026-05-14T08:00:00.000Z")
   })
 
-  test("accumulates daily cost", () => {
+  test("accumulates daily cost and tokens", () => {
     let data: CostData = { sessions: {}, daily: {} }
-    data = addCost(data, "sess-1", 0.01)
-    data = addCost(data, "sess-2", 0.02)
+    data = addUsage(data, "sess-1", 0.01, { input: 100, output: 50 })
+    data = addUsage(data, "sess-2", 0.02, { input: 200, output: 100 })
 
     const todayKey = new Date().toISOString().slice(0, 10)
-    expect(data.daily[todayKey]).toBeCloseTo(0.03, 6)
+    expect(data.daily[todayKey].cost).toBeCloseTo(0.03, 6)
+    expect(data.daily[todayKey].tokens.input).toBe(300)
+    expect(data.daily[todayKey].tokens.output).toBe(150)
   })
 })
 
 // --- Period queries ---
 
-describe("getSessionCost", () => {
-  test("returns 0 for unknown session", () => {
+describe("getSessionSummary", () => {
+  test("returns zeros for unknown session", () => {
     const data: CostData = { sessions: {}, daily: {} }
-    expect(getSessionCost(data, "nonexistent")).toBe(0)
+    const s = getSessionSummary(data, "nonexistent")
+    expect(s.cost).toBe(0)
+    expect(s.tokens.input).toBe(0)
+    expect(s.tokens.output).toBe(0)
   })
 
-  test("returns session cost", () => {
+  test("returns session cost and tokens", () => {
     const data: CostData = {
-      sessions: { "s1": { cost: 1.23, startedAt: "" } },
+      sessions: {
+        "s1": { cost: 1.23, tokens: { input: 5000, output: 2000 }, startedAt: "" },
+      },
       daily: {},
     }
-    expect(getSessionCost(data, "s1")).toBe(1.23)
+    const s = getSessionSummary(data, "s1")
+    expect(s.cost).toBe(1.23)
+    expect(s.tokens.input).toBe(5000)
+    expect(s.tokens.output).toBe(2000)
   })
 })
 
-describe("getTodayCost", () => {
-  test("returns 0 when no data for today", () => {
-    const data: CostData = { sessions: {}, daily: { "2020-01-01": 5.0 } }
-    expect(getTodayCost(data)).toBe(0)
+describe("getTodaySummary", () => {
+  test("returns zeros when no data for today", () => {
+    const data: CostData = {
+      sessions: {},
+      daily: { "2020-01-01": daily(5.0, 100, 50) },
+    }
+    const s = getTodaySummary(data)
+    expect(s.cost).toBe(0)
+    expect(s.tokens.input).toBe(0)
   })
 
-  test("returns today's cost", () => {
+  test("returns today's cost and tokens", () => {
     const todayKey = new Date().toISOString().slice(0, 10)
-    const data: CostData = { sessions: {}, daily: { [todayKey]: 2.5 } }
-    expect(getTodayCost(data)).toBe(2.5)
+    const data: CostData = {
+      sessions: {},
+      daily: { [todayKey]: daily(2.5, 10000, 3000) },
+    }
+    const s = getTodaySummary(data)
+    expect(s.cost).toBe(2.5)
+    expect(s.tokens.input).toBe(10000)
+    expect(s.tokens.output).toBe(3000)
   })
 })
 
-describe("getWeekCost", () => {
-  test("sums costs from current ISO week (Monday-Sunday)", () => {
+describe("getWeekSummary", () => {
+  test("sums costs and tokens from current ISO week", () => {
     const today = new Date()
     const dayOfWeek = today.getDay() || 7
     const monday = new Date(today)
     monday.setDate(today.getDate() - (dayOfWeek - 1))
 
-    const daily: Record<string, number> = {}
-    // Add costs for each day of the current week up to today
+    const dailyData: Record<string, DailyEntry> = {}
     for (let i = 0; i < dayOfWeek; i++) {
       const d = new Date(monday)
       d.setDate(monday.getDate() + i)
-      daily[d.toISOString().slice(0, 10)] = 1.0
+      dailyData[d.toISOString().slice(0, 10)] = daily(1.0, 1000, 500)
     }
-    // Add a cost from last week (should not be counted)
+    // Last week entry (should not be counted)
     const lastWeek = new Date(monday)
     lastWeek.setDate(monday.getDate() - 1)
-    daily[lastWeek.toISOString().slice(0, 10)] = 99.0
+    dailyData[lastWeek.toISOString().slice(0, 10)] = daily(99.0, 99000, 99000)
 
-    const data: CostData = { sessions: {}, daily }
-    expect(getWeekCost(data)).toBeCloseTo(dayOfWeek * 1.0, 2)
+    const data: CostData = { sessions: {}, daily: dailyData }
+    const s = getWeekSummary(data)
+    expect(s.cost).toBeCloseTo(dayOfWeek * 1.0, 2)
+    expect(s.tokens.input).toBe(dayOfWeek * 1000)
+    expect(s.tokens.output).toBe(dayOfWeek * 500)
   })
 })
 
-describe("getMonthCost", () => {
-  test("sums costs from the 1st of the month to today", () => {
+describe("getMonthSummary", () => {
+  test("sums costs and tokens from the 1st of the month", () => {
     const today = new Date()
     const dayOfMonth = today.getDate()
 
-    const daily: Record<string, number> = {}
+    const dailyData: Record<string, DailyEntry> = {}
     for (let i = 1; i <= dayOfMonth; i++) {
       const d = new Date(today.getFullYear(), today.getMonth(), i)
-      daily[d.toISOString().slice(0, 10)] = 0.5
+      dailyData[d.toISOString().slice(0, 10)] = daily(0.5, 500, 200)
     }
-    // Add a cost from last month (should not be counted)
+    // Last month (should not be counted)
     const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 15)
-    daily[lastMonth.toISOString().slice(0, 10)] = 99.0
+    dailyData[lastMonth.toISOString().slice(0, 10)] = daily(99.0, 99000, 99000)
 
-    const data: CostData = { sessions: {}, daily }
-    expect(getMonthCost(data)).toBeCloseTo(dayOfMonth * 0.5, 2)
+    const data: CostData = { sessions: {}, daily: dailyData }
+    const s = getMonthSummary(data)
+    expect(s.cost).toBeCloseTo(dayOfMonth * 0.5, 2)
+    expect(s.tokens.input).toBe(dayOfMonth * 500)
+    expect(s.tokens.output).toBe(dayOfMonth * 200)
   })
 })
 
@@ -301,5 +374,43 @@ describe("formatCost", () => {
     expect(formatCost(0.01)).toBe("$0.01")
     expect(formatCost(1.5)).toBe("$1.50")
     expect(formatCost(123.456)).toBe("$123.46")
+  })
+})
+
+// --- formatTokens ---
+
+describe("formatTokens", () => {
+  test("formats zero", () => {
+    expect(formatTokens(0)).toBe("0")
+  })
+
+  test("formats small numbers with locale string", () => {
+    expect(formatTokens(999)).toBe("999")
+  })
+
+  test("formats thousands with K suffix", () => {
+    expect(formatTokens(1500)).toBe("1.5K")
+    expect(formatTokens(9999)).toBe("10.0K")
+  })
+
+  test("formats tens of thousands without decimal", () => {
+    expect(formatTokens(45000)).toBe("45K")
+  })
+
+  test("formats millions with M suffix", () => {
+    expect(formatTokens(1_500_000)).toBe("1.5M")
+    expect(formatTokens(2_400_000)).toBe("2.4M")
+  })
+})
+
+// --- maskApiKey ---
+
+describe("maskApiKey", () => {
+  test("masks long keys", () => {
+    expect(maskApiKey("sk-GgJBySyVzFKmk0Y4AwuGhA")).toBe("sk-G...uGhA")
+  })
+
+  test("handles short keys", () => {
+    expect(maskApiKey("short")).toBe("****")
   })
 })
