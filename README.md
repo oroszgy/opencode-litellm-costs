@@ -25,13 +25,13 @@ OpenCode's built-in cost tracking can fail when using a LiteLLM proxy. This plug
 ## Quick Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oroszgy/opencode-litellm-costs/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/oroszgy/opencode-litellm-costs/master/install.sh | bash
 ```
 
 Or install a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oroszgy/opencode-litellm-costs/main/install.sh | bash -s -- v0.1.0
+curl -fsSL https://raw.githubusercontent.com/oroszgy/opencode-litellm-costs/master/install.sh | bash -s -- v0.1.0
 ```
 
 Then set your environment variables and register the plugin (see [Configuration](#configuration) below).

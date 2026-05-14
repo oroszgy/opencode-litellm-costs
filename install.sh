@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # opencode-litellm-costs installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/oroszgy/opencode-litellm-costs/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/oroszgy/opencode-litellm-costs/master/install.sh | bash
 # Or with a specific version: curl -fsSL ... | bash -s -- v0.1.0
 
 REPO="oroszgy/opencode-litellm-costs"
