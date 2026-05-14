@@ -1,4 +1,4 @@
-# opencode-litellm-cost-tracker
+# opencode-litellm-costs
 
 An [OpenCode](https://opencode.ai) plugin that tracks LiteLLM API costs and token usage per session, day, week, and month. Also queries your LiteLLM proxy for server-side spend reporting.
 
@@ -27,8 +27,8 @@ OpenCode's built-in cost tracking can fail when using a LiteLLM proxy. This plug
 ### Step 1: Clone the plugin
 
 ```bash
-git clone https://github.com/YOUR_USER/opencode-litellm-cost-tracker.git
-cd opencode-litellm-cost-tracker
+git clone https://github.com/oroszgy/opencode-litellm-costs.git
+cd opencode-litellm-costs
 bun install
 ```
 
@@ -42,8 +42,8 @@ Symlink into the global plugin directory:
 
 ```bash
 mkdir -p ~/.config/opencode/plugins
-ln -sf /absolute/path/to/opencode-litellm-cost-tracker/index.ts \
-  ~/.config/opencode/plugins/litellm-cost-tracker.ts
+ln -sf /absolute/path/to/opencode-litellm-costs/index.ts \
+  ~/.config/opencode/plugins/litellm-costs.ts
 ```
 
 #### Option B: Per-project plugin directory
@@ -52,8 +52,8 @@ Symlink into a specific project's `.opencode/plugins/`:
 
 ```bash
 mkdir -p /path/to/your/project/.opencode/plugins
-ln -sf /absolute/path/to/opencode-litellm-cost-tracker/index.ts \
-  /path/to/your/project/.opencode/plugins/litellm-cost-tracker.ts
+ln -sf /absolute/path/to/opencode-litellm-costs/index.ts \
+  /path/to/your/project/.opencode/plugins/litellm-costs.ts
 ```
 
 #### Option C: Explicit in opencode.json
@@ -64,7 +64,7 @@ Add to your `~/.config/opencode/opencode.json` (global) or project-level `openco
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
-    ["/absolute/path/to/opencode-litellm-cost-tracker/index.ts", {
+    ["/absolute/path/to/opencode-litellm-costs/index.ts", {
       "baseURL": "https://your-litellm-proxy.example.com",
       "apiKey": "sk-your-litellm-key",
       "alertThreshold": 5.0
@@ -136,7 +136,7 @@ export LITELLM_COST_ALERT_THRESHOLD="5.0"
 ```json
 {
   "plugin": [
-    ["/path/to/opencode-litellm-cost-tracker/index.ts", {
+    ["/path/to/opencode-litellm-costs/index.ts", {
       "baseURL": "https://your-litellm-proxy.example.com",
       "apiKey": "sk-your-litellm-key",
       "alertThreshold": 5.0
@@ -339,11 +339,12 @@ bunx tsc --noEmit
 ## File Structure
 
 ```
-opencode-litellm-cost-tracker/
+opencode-litellm-costs/
 ├── index.ts           # Plugin entry point, event hooks, cost + spend tools
 ├── tracker.ts         # Pricing fetch, cost math, LiteLLM API, file persistence
 ├── index.test.ts      # Integration tests for plugin hooks and tools
 ├── tracker.test.ts    # Unit tests for tracker functions
+├── install.sh         # Curl-installable installer script
 ├── package.json
 ├── tsconfig.json
 └── .gitignore
