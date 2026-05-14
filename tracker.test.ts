@@ -172,11 +172,11 @@ describe("persistence", () => {
     // Should migrate to DailyEntry format with models
     expect(data.daily["2026-05-14"]).toEqual({
       cost: 0.5,
-      tokens: { input: 0, output: 0 },
+      tokens: { input: 0, output: 0, reasoning: 0 },
       models: {},
     })
     // Should add tokens and models to session
-    expect(data.sessions["s1"].tokens).toEqual({ input: 0, output: 0 })
+    expect(data.sessions["s1"].tokens).toEqual({ input: 0, output: 0, reasoning: 0 })
     expect(data.sessions["s1"].models).toEqual({})
   })
 
@@ -185,16 +185,16 @@ describe("persistence", () => {
       sessions: {
         "sess-1": {
           cost: 0.05,
-          tokens: { input: 1000, output: 500 },
+          tokens: { input: 1000, output: 500, reasoning: 0 },
           startedAt: "2026-05-14T08:00:00.000Z",
-          models: { "claude-opus-4-6": { cost: 0.05, tokens: { input: 1000, output: 500 } } },
+          models: { "claude-opus-4-6": { cost: 0.05, tokens: { input: 1000, output: 500, reasoning: 0 } } },
         },
       },
       daily: {
         "2026-05-14": {
           cost: 0.05,
-          tokens: { input: 1000, output: 500 },
-          models: { "claude-opus-4-6": { cost: 0.05, tokens: { input: 1000, output: 500 } } },
+          tokens: { input: 1000, output: 500, reasoning: 0 },
+          models: { "claude-opus-4-6": { cost: 0.05, tokens: { input: 1000, output: 500, reasoning: 0 } } },
         },
       },
     }
@@ -434,7 +434,7 @@ describe("addUsage with modelId", () => {
 
     expect(data.sessions["sess-1"].models["claude-opus-4-6"]).toEqual({
       cost: 0.05,
-      tokens: { input: 1000, output: 500 },
+      tokens: { input: 1000, output: 500, reasoning: 0 },
     })
   })
 
@@ -445,7 +445,7 @@ describe("addUsage with modelId", () => {
     const todayKey = new Date().toISOString().slice(0, 10)
     expect(data.daily[todayKey].models["claude-sonnet-4-6"]).toEqual({
       cost: 0.03,
-      tokens: { input: 800, output: 300 },
+      tokens: { input: 800, output: 300, reasoning: 0 },
     })
   })
 
@@ -457,11 +457,11 @@ describe("addUsage with modelId", () => {
 
     expect(data.sessions["sess-1"].models["claude-opus-4-6"]).toEqual({
       cost: 0.08,
-      tokens: { input: 1800, output: 800 },
+      tokens: { input: 1800, output: 800, reasoning: 0 },
     })
     expect(data.sessions["sess-1"].models["claude-sonnet-4-6"]).toEqual({
       cost: 0.02,
-      tokens: { input: 600, output: 200 },
+      tokens: { input: 600, output: 200, reasoning: 0 },
     })
     // Total session cost is still correct
     expect(data.sessions["sess-1"].cost).toBeCloseTo(0.1, 6)
@@ -482,8 +482,22 @@ describe("addUsage with modelId", () => {
     const todayKey = new Date().toISOString().slice(0, 10)
     expect(data.daily[todayKey].models["claude-opus-4-6"]).toEqual({
       cost: 0.08,
-      tokens: { input: 1800, output: 800 },
+      tokens: { input: 1800, output: 800, reasoning: 0 },
     })
+  })
+
+  test("tracks reasoning tokens separately", () => {
+    let data: CostData = { sessions: {}, daily: {} }
+    data = addUsage(data, "sess-1", 0.10, { input: 1000, output: 200, reasoning: 500 }, "o3")
+    data = addUsage(data, "sess-1", 0.05, { input: 500, output: 100, reasoning: 300 }, "o3")
+
+    expect(data.sessions["sess-1"].tokens.reasoning).toBe(800)
+    expect(data.sessions["sess-1"].tokens.output).toBe(300)
+    expect(data.sessions["sess-1"].models["o3"].tokens.reasoning).toBe(800)
+
+    const todayKey = new Date().toISOString().slice(0, 10)
+    expect(data.daily[todayKey].tokens.reasoning).toBe(800)
+    expect(data.daily[todayKey].models["o3"].tokens.reasoning).toBe(800)
   })
 })
 

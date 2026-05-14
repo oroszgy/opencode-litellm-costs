@@ -124,17 +124,18 @@ export const LiteLLMCostPlugin: Plugin = async ({ client }, options?) => {
     const sessionId = msg.sessionID || currentSessionId
     if (!sessionId) return
 
-    // Calculate total input/output tokens
+    // Calculate total input/output/reasoning tokens
     const totalInput = msg.tokens.input + msg.tokens.cache.read
-    const totalOutput = msg.tokens.output + msg.tokens.reasoning
-    const tokens: TokenUsage = { input: totalInput, output: totalOutput }
+    const totalOutput = msg.tokens.output
+    const reasoningTokens = msg.tokens.reasoning
+    const tokens: TokenUsage = { input: totalInput, output: totalOutput, reasoning: reasoningTokens }
 
     // Determine cost: use built-in cost if available, otherwise calculate
     let cost = 0
     if (msg.cost > 0) {
       cost = msg.cost
     } else {
-      if (totalInput === 0 && totalOutput === 0) return
+      if (totalInput === 0 && totalOutput === 0 && reasoningTokens === 0) return
 
       const modelPricing = findPricing(msg.modelID, msg.providerID)
       if (!modelPricing) {
@@ -142,7 +143,7 @@ export const LiteLLMCostPlugin: Plugin = async ({ client }, options?) => {
           body: {
             service: "litellm-cost-tracker",
             level: "debug",
-            message: `No pricing found for model "${msg.modelID}" (provider: ${msg.providerID}). Tokens: in=${totalInput}, out=${totalOutput}`,
+            message: `No pricing found for model "${msg.modelID}" (provider: ${msg.providerID}). Tokens: in=${totalInput}, out=${totalOutput}, reasoning=${reasoningTokens}`,
           },
         }).catch(() => {})
         // Still track tokens even without cost
@@ -151,7 +152,8 @@ export const LiteLLMCostPlugin: Plugin = async ({ client }, options?) => {
         return
       }
 
-      cost = calculateCost(totalInput, totalOutput, modelPricing)
+      // Reasoning tokens are billed at output token rate
+      cost = calculateCost(totalInput, totalOutput + reasoningTokens, modelPricing)
     }
 
     // Accumulate cost and tokens
@@ -230,12 +232,12 @@ export const LiteLLMCostPlugin: Plugin = async ({ client }, options?) => {
           return [
             "## LiteLLM Cost Summary (Local Tracking)",
             "",
-            "| Period       | Cost          | Tokens In    | Tokens Out   |",
-            "|--------------|---------------|--------------|--------------|",
-            `| This Session | ${formatCost(session.cost).padEnd(13)} | ${formatTokens(session.tokens.input).padEnd(12)} | ${formatTokens(session.tokens.output).padEnd(12)} |`,
-            `| Today        | ${formatCost(today.cost).padEnd(13)} | ${formatTokens(today.tokens.input).padEnd(12)} | ${formatTokens(today.tokens.output).padEnd(12)} |`,
-            `| This Week    | ${formatCost(week.cost).padEnd(13)} | ${formatTokens(week.tokens.input).padEnd(12)} | ${formatTokens(week.tokens.output).padEnd(12)} |`,
-            `| This Month   | ${formatCost(month.cost).padEnd(13)} | ${formatTokens(month.tokens.input).padEnd(12)} | ${formatTokens(month.tokens.output).padEnd(12)} |`,
+            "| Period       | Cost          | Tokens In    | Tokens Out   | Reasoning    |",
+            "|--------------|---------------|--------------|--------------|--------------|",
+            `| This Session | ${formatCost(session.cost).padEnd(13)} | ${formatTokens(session.tokens.input).padEnd(12)} | ${formatTokens(session.tokens.output).padEnd(12)} | ${formatTokens(session.tokens.reasoning || 0).padEnd(12)} |`,
+            `| Today        | ${formatCost(today.cost).padEnd(13)} | ${formatTokens(today.tokens.input).padEnd(12)} | ${formatTokens(today.tokens.output).padEnd(12)} | ${formatTokens(today.tokens.reasoning || 0).padEnd(12)} |`,
+            `| This Week    | ${formatCost(week.cost).padEnd(13)} | ${formatTokens(week.tokens.input).padEnd(12)} | ${formatTokens(week.tokens.output).padEnd(12)} | ${formatTokens(week.tokens.reasoning || 0).padEnd(12)} |`,
+            `| This Month   | ${formatCost(month.cost).padEnd(13)} | ${formatTokens(month.tokens.input).padEnd(12)} | ${formatTokens(month.tokens.output).padEnd(12)} | ${formatTokens(month.tokens.reasoning || 0).padEnd(12)} |`,
             "",
             `Session started: ${startedAt}`,
             `Alert threshold: ${formatCost(config.alertThreshold)}`,
@@ -388,14 +390,14 @@ export const LiteLLMCostPlugin: Plugin = async ({ client }, options?) => {
 
             const rows: string[] = []
             rows.push(
-              "| Model                              | Cost          | Tokens In    | Tokens Out   |"
+              "| Model                              | Cost          | Tokens In    | Tokens Out   | Reasoning    |"
             )
             rows.push(
-              "|------------------------------------|---------------|--------------|--------------|"
+              "|------------------------------------|---------------|--------------|--------------|--------------|"
             )
             for (const [model, usage] of entries) {
               rows.push(
-                `| ${model.padEnd(34)} | ${formatCost(usage.cost).padEnd(13)} | ${formatTokens(usage.tokens.input).padEnd(12)} | ${formatTokens(usage.tokens.output).padEnd(12)} |`
+                `| ${model.padEnd(34)} | ${formatCost(usage.cost).padEnd(13)} | ${formatTokens(usage.tokens.input).padEnd(12)} | ${formatTokens(usage.tokens.output).padEnd(12)} | ${formatTokens(usage.tokens.reasoning || 0).padEnd(12)} |`
               )
             }
             rows.push("")

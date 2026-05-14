@@ -14,6 +14,7 @@ export type PricingMap = Map<string, PricingInfo>
 export interface TokenUsage {
   input: number
   output: number
+  reasoning?: number
 }
 
 export interface ModelUsageEntry {
@@ -209,7 +210,7 @@ export function getCostFilePath(): string {
 }
 
 function emptyTokenUsage(): TokenUsage {
-  return { input: 0, output: 0 }
+  return { input: 0, output: 0, reasoning: 0 }
 }
 
 function emptyCostData(): CostData {
@@ -229,14 +230,17 @@ export function loadCostData(filePath?: string): CostData {
     for (const [key, value] of Object.entries(data.daily)) {
       if (typeof value === "number") {
         ;(data.daily as any)[key] = { cost: value, tokens: emptyTokenUsage(), models: {} }
-      } else if (!value.models) {
-        value.models = {}
+      } else {
+        if (!value.models) value.models = {}
+        if (value.tokens && value.tokens.reasoning == null) value.tokens.reasoning = 0
       }
     }
-    // Migrate old sessions without tokens or models
+    // Migrate old sessions without tokens, models, or reasoning
     for (const [key, value] of Object.entries(data.sessions)) {
       if (!value.tokens) {
         value.tokens = emptyTokenUsage()
+      } else if (value.tokens.reasoning == null) {
+        value.tokens.reasoning = 0
       }
       if (!value.models) {
         value.models = {}
@@ -316,9 +320,11 @@ export function addUsage(
       models: {},
     }
   }
+  const reasoning = tokens.reasoning || 0
   data.sessions[sessionId].cost += cost
   data.sessions[sessionId].tokens.input += tokens.input
   data.sessions[sessionId].tokens.output += tokens.output
+  data.sessions[sessionId].tokens.reasoning = (data.sessions[sessionId].tokens.reasoning || 0) + reasoning
 
   // Update session per-model
   if (modelId) {
@@ -331,6 +337,7 @@ export function addUsage(
     data.sessions[sessionId].models[modelId].cost += cost
     data.sessions[sessionId].models[modelId].tokens.input += tokens.input
     data.sessions[sessionId].models[modelId].tokens.output += tokens.output
+    data.sessions[sessionId].models[modelId].tokens.reasoning = (data.sessions[sessionId].models[modelId].tokens.reasoning || 0) + reasoning
   }
 
   // Update daily
@@ -340,6 +347,7 @@ export function addUsage(
   data.daily[today].cost += cost
   data.daily[today].tokens.input += tokens.input
   data.daily[today].tokens.output += tokens.output
+  data.daily[today].tokens.reasoning = (data.daily[today].tokens.reasoning || 0) + reasoning
 
   // Update daily per-model
   if (modelId) {
@@ -352,6 +360,7 @@ export function addUsage(
     data.daily[today].models[modelId].cost += cost
     data.daily[today].models[modelId].tokens.input += tokens.input
     data.daily[today].models[modelId].tokens.output += tokens.output
+    data.daily[today].models[modelId].tokens.reasoning = (data.daily[today].models[modelId].tokens.reasoning || 0) + reasoning
   }
 
   return data
@@ -390,6 +399,7 @@ export function getWeekSummary(data: CostData): PeriodSummary {
       result.cost += entry.cost
       result.tokens.input += entry.tokens.input
       result.tokens.output += entry.tokens.output
+      result.tokens.reasoning = (result.tokens.reasoning || 0) + (entry.tokens.reasoning || 0)
     }
   }
   return result
@@ -406,6 +416,7 @@ export function getMonthSummary(data: CostData): PeriodSummary {
       result.cost += entry.cost
       result.tokens.input += entry.tokens.input
       result.tokens.output += entry.tokens.output
+      result.tokens.reasoning = (result.tokens.reasoning || 0) + (entry.tokens.reasoning || 0)
     }
   }
   return result
@@ -424,6 +435,7 @@ function mergeModelUsage(
     target[modelId].cost += usage.cost
     target[modelId].tokens.input += usage.tokens.input
     target[modelId].tokens.output += usage.tokens.output
+    target[modelId].tokens.reasoning = (target[modelId].tokens.reasoning || 0) + (usage.tokens.reasoning || 0)
   }
 }
 
