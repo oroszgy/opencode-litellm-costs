@@ -800,4 +800,54 @@ describe("LiteLLMCostPlugin", () => {
     expect(result).toContain("$3.00")
     expect(result).toContain("$2.00")
   })
+
+  // --- cost-reset tool tests ---
+
+  test("cost-reset tool clears all tracked data", async () => {
+    const { hooks } = await setupPlugin()
+
+    await hooks.event!({
+      event: {
+        type: "session.created",
+        properties: { info: { id: "sess-reset" } },
+      } as any,
+    })
+
+    // Generate some cost
+    await hooks.event!({
+      event: {
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "msg-before-reset",
+            sessionID: "sess-reset",
+            role: "assistant",
+            modelID: "claude-sonnet-4-6",
+            providerID: "anthropic",
+            cost: 0,
+            tokens: {
+              input: 1000,
+              output: 500,
+              reasoning: 0,
+              cache: { read: 0, write: 0 },
+            },
+            time: { created: Date.now(), completed: Date.now() },
+          },
+        },
+      } as any,
+    })
+
+    // Verify cost exists
+    let result = await hooks.tool!.cost.execute({} as any, toolCtx)
+    expect(result).not.toContain("| This Session | $0.00")
+
+    // Reset
+    const resetResult = await hooks.tool!["cost-reset"].execute({} as any, toolCtx)
+    expect(resetResult).toContain("## Cost Data Reset")
+    expect(resetResult).toContain("All locally tracked cost data has been cleared")
+
+    // Verify cost is now zero
+    result = await hooks.tool!.cost.execute({} as any, toolCtx)
+    expect(result).toContain("| This Session | $0.00")
+  })
 })

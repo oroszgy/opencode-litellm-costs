@@ -9,6 +9,8 @@ import {
   loadCostData,
   saveCostData,
   pruneOldData,
+  resetCostData,
+  resetSessionData,
   addUsage,
   getSessionSummary,
   getTodaySummary,
@@ -534,6 +536,33 @@ export const LiteLLMCostPlugin: Plugin = async ({ client }, options?) => {
           } catch (err) {
             return `Error fetching per-model spend data: ${err instanceof Error ? err.message : String(err)}`
           }
+        },
+      }),
+
+      // /cost-reset — reset locally tracked cost data
+      "cost-reset": tool({
+        description:
+          "Resets all locally tracked cost data (sessions and daily totals). This cannot be undone.",
+        args: {},
+        async execute() {
+          const sessionId = currentSessionId || "unknown"
+          const sessionSummary = getSessionSummary(costData, sessionId)
+          const previousCost = sessionSummary.cost
+
+          costData = resetCostData()
+          saveCostData(costData)
+          processedMessages.clear()
+          alertFired = false
+
+          return [
+            "## Cost Data Reset",
+            "",
+            "All locally tracked cost data has been cleared.",
+            "",
+            `Previous session cost: ${formatCost(previousCost)}`,
+            "",
+            "_Note: This only resets local tracking. Server-side spend (via /spend) is unaffected._",
+          ].join("\n")
         },
       }),
     },

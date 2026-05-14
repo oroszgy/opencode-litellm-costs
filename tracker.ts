@@ -217,6 +217,22 @@ function emptyCostData(): CostData {
   return { sessions: {}, daily: {} }
 }
 
+/**
+ * Returns a fresh empty CostData, effectively resetting all tracked data.
+ */
+export function resetCostData(): CostData {
+  return emptyCostData()
+}
+
+/**
+ * Removes a specific session from cost data, returning a new CostData.
+ * Daily aggregates are not affected (they span across sessions).
+ */
+export function resetSessionData(data: CostData, sessionId: string): CostData {
+  const { [sessionId]: _, ...remainingSessions } = data.sessions
+  return { ...data, sessions: remainingSessions }
+}
+
 export function loadCostData(filePath?: string): CostData {
   const path = filePath || COST_FILE_PATH
   try {
