@@ -37,7 +37,7 @@ curl -fsSL "$TARBALL_URL" | tar -xz -C "$PLUGIN_DIR" --strip-components=1
 
 # Install dependencies
 info "Installing dependencies..."
-(cd "$PLUGIN_DIR" && bun install --frozen-lockfile 2>/dev/null || bun install)
+(cd "$PLUGIN_DIR" && bun install)
 
 success ""
 success "opencode-litellm-costs ${VERSION} installed to ${PLUGIN_DIR}"
