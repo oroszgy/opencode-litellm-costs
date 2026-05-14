@@ -63,6 +63,27 @@ describe("resolveConfig", () => {
     expect(config.apiKey).toBe("env-key")
     expect(config.alertThreshold).toBe(3.0)
   })
+
+  test("accepts baseURL (capital) as alias for baseUrl", () => {
+    delete process.env.LITELLM_BASE_URL
+
+    const config = resolveConfig({
+      baseURL: "http://capital-url:5000",
+    })
+
+    expect(config.baseUrl).toBe("http://capital-url:5000")
+  })
+
+  test("prefers baseUrl over baseURL when both provided", () => {
+    delete process.env.LITELLM_BASE_URL
+
+    const config = resolveConfig({
+      baseUrl: "http://lowercase-wins:1000",
+      baseURL: "http://uppercase-loses:2000",
+    })
+
+    expect(config.baseUrl).toBe("http://lowercase-wins:1000")
+  })
 })
 
 // --- calculateCost ---

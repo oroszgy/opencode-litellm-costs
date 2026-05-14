@@ -32,6 +32,7 @@ export function resolveConfig(options?: Record<string, unknown>): PluginConfig {
   return {
     baseUrl:
       (options?.baseUrl as string) ||
+      (options?.baseURL as string) ||
       process.env.LITELLM_BASE_URL ||
       "http://localhost:4000",
     apiKey:
