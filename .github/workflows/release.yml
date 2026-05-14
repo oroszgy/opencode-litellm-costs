@@ -19,7 +19,7 @@ jobs:
           VERSION="${GITHUB_REF_NAME}"
           DIR="opencode-litellm-costs-${VERSION}"
           mkdir -p "$DIR"
-          cp index.ts tracker.ts package.json bun.lock install.sh "$DIR/"
+          cp index.ts tracker.ts package.json install.sh "$DIR/"
           tar -czf "${DIR}.tar.gz" "$DIR"
 
       - name: Create GitHub Release
