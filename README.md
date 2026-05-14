@@ -22,7 +22,21 @@ OpenCode's built-in cost tracking can fail when using a LiteLLM proxy. This plug
 - **Persistent storage** — survives restarts via `~/.config/opencode/plugin-cost.json`
 - **Graceful degradation** — never crashes the TUI, fails silently with debug logging
 
-## Installation
+## Quick Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oroszgy/opencode-litellm-costs/main/install.sh | bash
+```
+
+Or install a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oroszgy/opencode-litellm-costs/main/install.sh | bash -s -- v0.1.0
+```
+
+Then set your environment variables and register the plugin (see [Configuration](#configuration) below).
+
+## Manual Installation
 
 ### Step 1: Clone the plugin
 
