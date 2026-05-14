@@ -456,4 +456,231 @@ describe("LiteLLMCostPlugin", () => {
     const result = await hooks.tool!.spend.execute({} as any, toolCtx)
     expect(result).toContain("Error: No LITELLM_API_KEY")
   })
+
+  // --- cost-models tool tests ---
+
+  test("cost-models tool shows per-model breakdown after messages", async () => {
+    const { hooks } = await setupPlugin()
+
+    await hooks.event!({
+      event: {
+        type: "session.created",
+        properties: { info: { id: "sess-models" } },
+      } as any,
+    })
+
+    // Send messages from two different models
+    await hooks.event!({
+      event: {
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "msg-opus-1",
+            sessionID: "sess-models",
+            role: "assistant",
+            modelID: "claude-opus-4-6",
+            providerID: "anthropic",
+            cost: 0,
+            tokens: {
+              input: 2000,
+              output: 1000,
+              reasoning: 0,
+              cache: { read: 0, write: 0 },
+            },
+            time: { created: Date.now(), completed: Date.now() },
+          },
+        },
+      } as any,
+    })
+
+    await hooks.event!({
+      event: {
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "msg-sonnet-1",
+            sessionID: "sess-models",
+            role: "assistant",
+            modelID: "claude-sonnet-4-6",
+            providerID: "anthropic",
+            cost: 0,
+            tokens: {
+              input: 1000,
+              output: 500,
+              reasoning: 0,
+              cache: { read: 0, write: 0 },
+            },
+            time: { created: Date.now(), completed: Date.now() },
+          },
+        },
+      } as any,
+    })
+
+    const result = await hooks.tool!["cost-models"].execute({} as any, toolCtx)
+
+    expect(result).toContain("## Per-Model Cost Breakdown (Local Tracking)")
+    expect(result).toContain("### This Session")
+    expect(result).toContain("claude-opus-4-6")
+    expect(result).toContain("claude-sonnet-4-6")
+    expect(result).toContain("### Today")
+    expect(result).toContain("### This Week")
+    expect(result).toContain("### This Month")
+  })
+
+  test("cost-models tool shows no data message when no models tracked", async () => {
+    const { hooks } = await setupPlugin()
+
+    await hooks.event!({
+      event: {
+        type: "session.created",
+        properties: { info: { id: "sess-empty-models" } },
+      } as any,
+    })
+
+    const result = await hooks.tool!["cost-models"].execute({} as any, toolCtx)
+    expect(result).toContain("_No model data recorded._")
+  })
+
+  test("cost-models tool tracks model from message with built-in cost", async () => {
+    const { hooks } = await setupPlugin()
+
+    await hooks.event!({
+      event: {
+        type: "session.created",
+        properties: { info: { id: "sess-builtin" } },
+      } as any,
+    })
+
+    await hooks.event!({
+      event: {
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "msg-builtin-cost",
+            sessionID: "sess-builtin",
+            role: "assistant",
+            modelID: "gpt-4o",
+            providerID: "openai",
+            cost: 0.15,
+            tokens: {
+              input: 5000,
+              output: 2000,
+              reasoning: 0,
+              cache: { read: 0, write: 0 },
+            },
+            time: { created: Date.now(), completed: Date.now() },
+          },
+        },
+      } as any,
+    })
+
+    const result = await hooks.tool!["cost-models"].execute({} as any, toolCtx)
+    expect(result).toContain("gpt-4o")
+    expect(result).toContain("$0.15")
+  })
+
+  // --- spend-models tool tests ---
+
+  test("spend-models tool shows per-model server spend", async () => {
+    const { hooks } = await setupPlugin()
+
+    const result = await hooks.tool!["spend-models"].execute({} as any, toolCtx)
+
+    expect(result).toContain("## Per-Model Server Spend")
+    expect(result).toContain("sk-G...uGhA")
+    // Table headers
+    expect(result).toContain("Today")
+    expect(result).toContain("This Week")
+    expect(result).toContain("This Month")
+    expect(result).toContain("Lifetime")
+    // Model data from mock key info (lifetime)
+    expect(result).toContain("claude-opus-4-6")
+    expect(result).toContain("claude-sonnet-4-6")
+  })
+
+  test("spend-models tool handles missing API key", async () => {
+    globalThis.fetch = mock((url: string) => {
+      if (url.includes("/model/info")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_PRICING_RESPONSE),
+        } as Response)
+      }
+      return Promise.reject(new Error("nope"))
+    }) as any
+
+    const client = createMockClient()
+    const { LiteLLMCostPlugin } = await import("./index")
+
+    const hooks = await LiteLLMCostPlugin(
+      {
+        client: client as any,
+        project: {} as any,
+        directory: tmpDir,
+        worktree: tmpDir,
+        experimental_workspace: { register: () => {} },
+        serverUrl: new URL("http://localhost:4096"),
+        $: {} as any,
+      },
+      { baseUrl: "http://localhost:4000", apiKey: "" }
+    )
+
+    const result = await hooks.tool!["spend-models"].execute({} as any, toolCtx)
+    expect(result).toContain("Error: No LITELLM_API_KEY")
+  })
+
+  test("spend-models tool aggregates models from spend logs", async () => {
+    // Override fetch with model data in spend logs
+    globalThis.fetch = mock((url: string) => {
+      if (url.includes("/model/info")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_PRICING_RESPONSE),
+        } as Response)
+      }
+      if (url.includes("/key/info")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            key: "test",
+            info: { spend: 50, model_spend: { "model-a": 30, "model-b": 20 } },
+          }),
+        } as Response)
+      }
+      if (url.includes("/spend/logs")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([
+            { startTime: "2026-05-14", spend: 5.0, models: { "model-a": 3.0, "model-b": 2.0 } },
+            { startTime: "2026-05-13", spend: 4.0, models: { "model-a": 2.5, "model-b": 1.5 } },
+          ]),
+        } as Response)
+      }
+      return Promise.reject(new Error(`Unexpected: ${url}`))
+    }) as any
+
+    const client = createMockClient()
+    const { LiteLLMCostPlugin } = await import("./index")
+
+    const hooks = await LiteLLMCostPlugin(
+      {
+        client: client as any,
+        project: {} as any,
+        directory: tmpDir,
+        worktree: tmpDir,
+        experimental_workspace: { register: () => {} },
+        serverUrl: new URL("http://localhost:4096"),
+        $: {} as any,
+      },
+      { baseUrl: "http://localhost:4000", apiKey: "sk-test-key-1234567890" }
+    )
+
+    const result = await hooks.tool!["spend-models"].execute({} as any, toolCtx)
+
+    expect(result).toContain("model-a")
+    expect(result).toContain("model-b")
+    // Lifetime from key info
+    expect(result).toContain("$30.00")
+    expect(result).toContain("$20.00")
+  })
 })

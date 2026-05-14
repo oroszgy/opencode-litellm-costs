@@ -15,6 +15,10 @@ import {
   getWeekCost,
   getMonthSummary,
   getMonthCost,
+  getSessionModelBreakdown,
+  getTodayModelBreakdown,
+  getWeekModelBreakdown,
+  getMonthModelBreakdown,
   formatCost,
   formatTokens,
   maskApiKey,
@@ -22,11 +26,12 @@ import {
   type PricingInfo,
   type DailyEntry,
   type TokenUsage,
+  type ModelUsageEntry,
 } from "./tracker"
 
 // Helper to create a daily entry
-function daily(cost: number, input = 0, output = 0): DailyEntry {
-  return { cost, tokens: { input, output } }
+function daily(cost: number, input = 0, output = 0, models: Record<string, ModelUsageEntry> = {}): DailyEntry {
+  return { cost, tokens: { input, output }, models }
 }
 
 // --- resolveConfig ---
@@ -419,5 +424,238 @@ describe("maskApiKey", () => {
 
   test("handles short keys", () => {
     expect(maskApiKey("short")).toBe("****")
+  })
+})
+
+// --- Per-model tracking ---
+
+describe("addUsage with modelId", () => {
+  test("tracks per-model usage in session", () => {
+    let data: CostData = { sessions: {}, daily: {} }
+    data = addUsage(data, "sess-1", 0.05, { input: 1000, output: 500 }, "claude-opus-4-6")
+
+    expect(data.sessions["sess-1"].models["claude-opus-4-6"]).toEqual({
+      cost: 0.05,
+      tokens: { input: 1000, output: 500 },
+    })
+  })
+
+  test("tracks per-model usage in daily", () => {
+    let data: CostData = { sessions: {}, daily: {} }
+    data = addUsage(data, "sess-1", 0.03, { input: 800, output: 300 }, "claude-sonnet-4-6")
+
+    const todayKey = new Date().toISOString().slice(0, 10)
+    expect(data.daily[todayKey].models["claude-sonnet-4-6"]).toEqual({
+      cost: 0.03,
+      tokens: { input: 800, output: 300 },
+    })
+  })
+
+  test("accumulates multiple models in same session", () => {
+    let data: CostData = { sessions: {}, daily: {} }
+    data = addUsage(data, "sess-1", 0.05, { input: 1000, output: 500 }, "claude-opus-4-6")
+    data = addUsage(data, "sess-1", 0.02, { input: 600, output: 200 }, "claude-sonnet-4-6")
+    data = addUsage(data, "sess-1", 0.03, { input: 800, output: 300 }, "claude-opus-4-6")
+
+    expect(data.sessions["sess-1"].models["claude-opus-4-6"]).toEqual({
+      cost: 0.08,
+      tokens: { input: 1800, output: 800 },
+    })
+    expect(data.sessions["sess-1"].models["claude-sonnet-4-6"]).toEqual({
+      cost: 0.02,
+      tokens: { input: 600, output: 200 },
+    })
+    // Total session cost is still correct
+    expect(data.sessions["sess-1"].cost).toBeCloseTo(0.1, 6)
+  })
+
+  test("does not add model entry when modelId is undefined", () => {
+    let data: CostData = { sessions: {}, daily: {} }
+    data = addUsage(data, "sess-1", 0.05, { input: 1000, output: 500 })
+
+    expect(Object.keys(data.sessions["sess-1"].models)).toHaveLength(0)
+  })
+
+  test("accumulates per-model in daily across sessions", () => {
+    let data: CostData = { sessions: {}, daily: {} }
+    data = addUsage(data, "sess-1", 0.05, { input: 1000, output: 500 }, "claude-opus-4-6")
+    data = addUsage(data, "sess-2", 0.03, { input: 800, output: 300 }, "claude-opus-4-6")
+
+    const todayKey = new Date().toISOString().slice(0, 10)
+    expect(data.daily[todayKey].models["claude-opus-4-6"]).toEqual({
+      cost: 0.08,
+      tokens: { input: 1800, output: 800 },
+    })
+  })
+})
+
+describe("getSessionModelBreakdown", () => {
+  test("returns empty object for unknown session", () => {
+    const data: CostData = { sessions: {}, daily: {} }
+    expect(getSessionModelBreakdown(data, "nonexistent")).toEqual({})
+  })
+
+  test("returns model breakdown for session", () => {
+    const data: CostData = {
+      sessions: {
+        "s1": {
+          cost: 0.1,
+          tokens: { input: 2000, output: 1000 },
+          startedAt: "",
+          models: {
+            "claude-opus-4-6": { cost: 0.07, tokens: { input: 1500, output: 700 } },
+            "claude-sonnet-4-6": { cost: 0.03, tokens: { input: 500, output: 300 } },
+          },
+        },
+      },
+      daily: {},
+    }
+
+    const result = getSessionModelBreakdown(data, "s1")
+    expect(result["claude-opus-4-6"].cost).toBe(0.07)
+    expect(result["claude-sonnet-4-6"].tokens.input).toBe(500)
+  })
+})
+
+describe("getTodayModelBreakdown", () => {
+  test("returns empty object when no data for today", () => {
+    const data: CostData = {
+      sessions: {},
+      daily: { "2020-01-01": daily(5.0, 100, 50, { "gpt-4": { cost: 5.0, tokens: { input: 100, output: 50 } } }) },
+    }
+    expect(getTodayModelBreakdown(data)).toEqual({})
+  })
+
+  test("returns today's model breakdown", () => {
+    const todayKey = new Date().toISOString().slice(0, 10)
+    const models = {
+      "claude-opus-4-6": { cost: 2.0, tokens: { input: 8000, output: 2000 } },
+      "claude-sonnet-4-6": { cost: 0.5, tokens: { input: 2000, output: 1000 } },
+    }
+    const data: CostData = {
+      sessions: {},
+      daily: { [todayKey]: daily(2.5, 10000, 3000, models) },
+    }
+    const result = getTodayModelBreakdown(data)
+    expect(result["claude-opus-4-6"].cost).toBe(2.0)
+    expect(result["claude-sonnet-4-6"].tokens.output).toBe(1000)
+  })
+})
+
+describe("getWeekModelBreakdown", () => {
+  test("aggregates models across week days", () => {
+    const today = new Date()
+    const dayOfWeek = today.getDay() || 7
+    const monday = new Date(today)
+    monday.setDate(today.getDate() - (dayOfWeek - 1))
+
+    const dailyData: Record<string, DailyEntry> = {}
+    // Add 2 days of model data within the week
+    for (let i = 0; i < Math.min(2, dayOfWeek); i++) {
+      const d = new Date(monday)
+      d.setDate(monday.getDate() + i)
+      dailyData[d.toISOString().slice(0, 10)] = daily(1.0, 1000, 500, {
+        "claude-opus-4-6": { cost: 0.8, tokens: { input: 800, output: 400 } },
+        "claude-sonnet-4-6": { cost: 0.2, tokens: { input: 200, output: 100 } },
+      })
+    }
+    // Last week entry (should not be counted)
+    const lastWeek = new Date(monday)
+    lastWeek.setDate(monday.getDate() - 1)
+    dailyData[lastWeek.toISOString().slice(0, 10)] = daily(99.0, 99000, 99000, {
+      "gpt-4": { cost: 99.0, tokens: { input: 99000, output: 99000 } },
+    })
+
+    const data: CostData = { sessions: {}, daily: dailyData }
+    const result = getWeekModelBreakdown(data)
+
+    const daysInWeek = Math.min(2, dayOfWeek)
+    expect(result["claude-opus-4-6"].cost).toBeCloseTo(0.8 * daysInWeek, 2)
+    expect(result["claude-sonnet-4-6"].tokens.input).toBe(200 * daysInWeek)
+    // gpt-4 from last week should not appear
+    expect(result["gpt-4"]).toBeUndefined()
+  })
+})
+
+describe("getMonthModelBreakdown", () => {
+  test("aggregates models across month days", () => {
+    const today = new Date()
+    const dayOfMonth = today.getDate()
+
+    const dailyData: Record<string, DailyEntry> = {}
+    // Add first 2 days of month
+    for (let i = 1; i <= Math.min(2, dayOfMonth); i++) {
+      const d = new Date(today.getFullYear(), today.getMonth(), i)
+      dailyData[d.toISOString().slice(0, 10)] = daily(0.5, 500, 200, {
+        "claude-opus-4-6": { cost: 0.5, tokens: { input: 500, output: 200 } },
+      })
+    }
+    // Last month (should not be counted)
+    const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 15)
+    dailyData[lastMonth.toISOString().slice(0, 10)] = daily(99.0, 99000, 99000, {
+      "gpt-4": { cost: 99.0, tokens: { input: 99000, output: 99000 } },
+    })
+
+    const data: CostData = { sessions: {}, daily: dailyData }
+    const result = getMonthModelBreakdown(data)
+
+    const daysInMonth = Math.min(2, dayOfMonth)
+    expect(result["claude-opus-4-6"].cost).toBeCloseTo(0.5 * daysInMonth, 2)
+    expect(result["gpt-4"]).toBeUndefined()
+  })
+})
+
+describe("loadCostData migration for models field", () => {
+  const tmpDir = join("/tmp/opencode", "cost-tracker-test-models")
+  const testFile = join(tmpDir, "test-cost-models.json")
+
+  beforeEach(() => {
+    mkdirSync(tmpDir, { recursive: true })
+    if (existsSync(testFile)) rmSync(testFile)
+  })
+
+  afterEach(() => {
+    if (existsSync(testFile)) rmSync(testFile)
+  })
+
+  test("migrates sessions without models field", () => {
+    const oldData = {
+      sessions: {
+        "s1": { cost: 1.0, tokens: { input: 5000, output: 2000 }, startedAt: "2026-05-14T00:00:00Z" },
+      },
+      daily: {
+        "2026-05-14": { cost: 1.0, tokens: { input: 5000, output: 2000 } },
+      },
+    }
+    writeFileSync(testFile, JSON.stringify(oldData), "utf-8")
+    const data = loadCostData(testFile)
+
+    expect(data.sessions["s1"].models).toEqual({})
+    expect(data.daily["2026-05-14"].models).toEqual({})
+  })
+
+  test("preserves existing models data", () => {
+    const existingData = {
+      sessions: {
+        "s1": {
+          cost: 1.0,
+          tokens: { input: 5000, output: 2000 },
+          startedAt: "2026-05-14T00:00:00Z",
+          models: { "claude-opus-4-6": { cost: 1.0, tokens: { input: 5000, output: 2000 } } },
+        },
+      },
+      daily: {
+        "2026-05-14": {
+          cost: 1.0,
+          tokens: { input: 5000, output: 2000 },
+          models: { "claude-opus-4-6": { cost: 1.0, tokens: { input: 5000, output: 2000 } } },
+        },
+      },
+    }
+    writeFileSync(testFile, JSON.stringify(existingData), "utf-8")
+    const data = loadCostData(testFile)
+
+    expect(data.sessions["s1"].models["claude-opus-4-6"].cost).toBe(1.0)
+    expect(data.daily["2026-05-14"].models["claude-opus-4-6"].tokens.input).toBe(5000)
   })
 })
