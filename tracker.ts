@@ -357,15 +357,6 @@ export function addUsage(
   return data
 }
 
-// Keep backward compat — addCost delegates to addUsage with zero tokens
-export function addCost(
-  data: CostData,
-  sessionId: string,
-  cost: number
-): CostData {
-  return addUsage(data, sessionId, cost, emptyTokenUsage())
-}
-
 // --- Period Queries ---
 
 export interface PeriodSummary {
@@ -379,20 +370,10 @@ export function getSessionSummary(data: CostData, sessionId: string): PeriodSumm
   return { cost: entry.cost, tokens: entry.tokens }
 }
 
-export function getSessionCost(data: CostData, sessionId: string): number {
-  return data.sessions[sessionId]?.cost || 0
-}
-
 export function getTodaySummary(data: CostData): PeriodSummary {
   const entry = data.daily[getTodayKey()]
   if (!entry) return { cost: 0, tokens: emptyTokenUsage() }
   return { cost: entry.cost, tokens: entry.tokens }
-}
-
-export function getTodayCost(data: CostData): number {
-  const entry = data.daily[getTodayKey()]
-  if (!entry) return 0
-  return entry.cost
 }
 
 export function getWeekSummary(data: CostData): PeriodSummary {
@@ -414,10 +395,6 @@ export function getWeekSummary(data: CostData): PeriodSummary {
   return result
 }
 
-export function getWeekCost(data: CostData): number {
-  return getWeekSummary(data).cost
-}
-
 export function getMonthSummary(data: CostData): PeriodSummary {
   const today = new Date()
   const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1)
@@ -432,10 +409,6 @@ export function getMonthSummary(data: CostData): PeriodSummary {
     }
   }
   return result
-}
-
-export function getMonthCost(data: CostData): number {
-  return getMonthSummary(data).cost
 }
 
 // --- Model Breakdown Queries ---
