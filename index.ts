@@ -88,9 +88,10 @@ export const LiteLLMCostPlugin: Plugin = async ({ client }, options?) => {
       if (p) return p
     }
 
-    // Try partial match (model name without version suffixes, etc.)
+    // Try suffix match: find a pricing key that ends with the model ID
+    // (handles cases like "openai/gpt-4o" matching "gpt-4o")
     for (const [key, value] of pricing) {
-      if (key.includes(modelID) || modelID.includes(key)) {
+      if (key.endsWith(`/${modelID}`)) {
         return value
       }
     }
