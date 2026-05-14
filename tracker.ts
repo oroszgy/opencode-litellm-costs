@@ -392,7 +392,7 @@ export function getTodaySummary(data: CostData): PeriodSummary {
 export function getTodayCost(data: CostData): number {
   const entry = data.daily[getTodayKey()]
   if (!entry) return 0
-  return typeof entry === "number" ? entry : entry.cost
+  return entry.cost
 }
 
 export function getWeekSummary(data: CostData): PeriodSummary {
@@ -406,13 +406,9 @@ export function getWeekSummary(data: CostData): PeriodSummary {
   for (const [dateStr, entry] of Object.entries(data.daily)) {
     const date = new Date(dateStr + "T00:00:00")
     if (date >= monday && date <= today) {
-      if (typeof entry === "number") {
-        result.cost += entry
-      } else {
-        result.cost += entry.cost
-        result.tokens.input += entry.tokens.input
-        result.tokens.output += entry.tokens.output
-      }
+      result.cost += entry.cost
+      result.tokens.input += entry.tokens.input
+      result.tokens.output += entry.tokens.output
     }
   }
   return result
@@ -430,13 +426,9 @@ export function getMonthSummary(data: CostData): PeriodSummary {
   for (const [dateStr, entry] of Object.entries(data.daily)) {
     const date = new Date(dateStr + "T00:00:00")
     if (date >= firstOfMonth && date <= today) {
-      if (typeof entry === "number") {
-        result.cost += entry
-      } else {
-        result.cost += entry.cost
-        result.tokens.input += entry.tokens.input
-        result.tokens.output += entry.tokens.output
-      }
+      result.cost += entry.cost
+      result.tokens.input += entry.tokens.input
+      result.tokens.output += entry.tokens.output
     }
   }
   return result
@@ -478,7 +470,7 @@ export function getTodayModelBreakdown(
   data: CostData
 ): Record<string, ModelUsageEntry> {
   const entry = data.daily[getTodayKey()]
-  if (!entry || typeof entry === "number" || !entry.models) return {}
+  if (!entry || !entry.models) return {}
   const result: Record<string, ModelUsageEntry> = {}
   mergeModelUsage(result, entry.models)
   return result
@@ -497,7 +489,7 @@ export function getWeekModelBreakdown(
   for (const [dateStr, entry] of Object.entries(data.daily)) {
     const date = new Date(dateStr + "T00:00:00")
     if (date >= monday && date <= today) {
-      if (typeof entry !== "number" && entry.models) {
+      if (entry.models) {
         mergeModelUsage(result, entry.models)
       }
     }
@@ -515,7 +507,7 @@ export function getMonthModelBreakdown(
   for (const [dateStr, entry] of Object.entries(data.daily)) {
     const date = new Date(dateStr + "T00:00:00")
     if (date >= firstOfMonth && date <= today) {
-      if (typeof entry !== "number" && entry.models) {
+      if (entry.models) {
         mergeModelUsage(result, entry.models)
       }
     }
