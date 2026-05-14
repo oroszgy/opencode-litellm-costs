@@ -252,106 +252,110 @@ export const LiteLLMCostPlugin: Plugin = async ({ client }, options?) => {
             return "Error: No LITELLM_API_KEY configured. Cannot query server-side spend."
           }
 
-          const maskedKey = maskApiKey(config.apiKey)
-          const lines: string[] = [
-            `## LiteLLM Server Spend (Key: ${maskedKey})`,
-            "",
-          ]
+          try {
+            const maskedKey = maskApiKey(config.apiKey)
+            const lines: string[] = [
+              `## LiteLLM Server Spend (Key: ${maskedKey})`,
+              "",
+            ]
 
-          // Fetch key info for lifetime spend + model breakdown
-          const keyInfo = await fetchKeyInfo(config)
+            // Fetch key info for lifetime spend + model breakdown
+            const keyInfo = await fetchKeyInfo(config)
 
-          // Fetch spend logs for period breakdowns
-          const todayKey = getTodayKey()
-          const weekStart = getWeekStartKey()
-          const monthStart = getMonthStartKey()
-          // Add one day to today for end_date (inclusive)
-          const tomorrow = new Date()
-          tomorrow.setDate(tomorrow.getDate() + 1)
-          const endDate = tomorrow.toISOString().slice(0, 10)
+            // Fetch spend logs for period breakdowns
+            const todayKey = getTodayKey()
+            const weekStart = getWeekStartKey()
+            const monthStart = getMonthStartKey()
+            // Add one day to today for end_date (inclusive)
+            const tomorrow = new Date()
+            tomorrow.setDate(tomorrow.getDate() + 1)
+            const endDate = tomorrow.toISOString().slice(0, 10)
 
-          const [todayLogs, weekLogs, monthLogs] = await Promise.all([
-            fetchSpendLogs(config, todayKey, endDate),
-            fetchSpendLogs(config, weekStart, endDate),
-            fetchSpendLogs(config, monthStart, endDate),
-          ])
+            const [todayLogs, weekLogs, monthLogs] = await Promise.all([
+              fetchSpendLogs(config, todayKey, endDate),
+              fetchSpendLogs(config, weekStart, endDate),
+              fetchSpendLogs(config, monthStart, endDate),
+            ])
 
-          // Aggregate spend from logs
-          const sumSpend = (logs: { spend?: number }[]) =>
-            logs.reduce((sum, entry) => sum + (entry.spend || 0), 0)
+            // Aggregate spend from logs
+            const sumSpend = (logs: { spend?: number }[]) =>
+              logs.reduce((sum, entry) => sum + (entry.spend || 0), 0)
 
-          const todaySpend = sumSpend(todayLogs)
-          const weekSpend = sumSpend(weekLogs)
-          const monthSpend = sumSpend(monthLogs)
-          const lifetimeSpend = keyInfo?.info?.spend || 0
+            const todaySpend = sumSpend(todayLogs)
+            const weekSpend = sumSpend(weekLogs)
+            const monthSpend = sumSpend(monthLogs)
+            const lifetimeSpend = keyInfo?.info?.spend || 0
 
-          lines.push("| Period     | Spend         |")
-          lines.push("|------------|---------------|")
-          lines.push(`| Today      | ${formatCost(todaySpend).padEnd(13)} |`)
-          lines.push(`| This Week  | ${formatCost(weekSpend).padEnd(13)} |`)
-          lines.push(`| This Month | ${formatCost(monthSpend).padEnd(13)} |`)
-          lines.push(`| Lifetime   | ${formatCost(lifetimeSpend).padEnd(13)} |`)
+            lines.push("| Period     | Spend         |")
+            lines.push("|------------|---------------|")
+            lines.push(`| Today      | ${formatCost(todaySpend).padEnd(13)} |`)
+            lines.push(`| This Week  | ${formatCost(weekSpend).padEnd(13)} |`)
+            lines.push(`| This Month | ${formatCost(monthSpend).padEnd(13)} |`)
+            lines.push(`| Lifetime   | ${formatCost(lifetimeSpend).padEnd(13)} |`)
 
-          // Budget info
-          if (keyInfo?.info?.max_budget) {
-            const pct = ((lifetimeSpend / keyInfo.info.max_budget) * 100).toFixed(1)
-            lines.push("")
-            lines.push(
-              `Budget: ${formatCost(keyInfo.info.max_budget)} | Used: ${pct}%`
-            )
-            if (keyInfo.info.budget_reset_at) {
-              lines.push(`Resets: ${keyInfo.info.budget_reset_at}`)
-            }
-          }
-
-          // Per-model breakdown: prefer key info, fall back to lifetime spend logs
-          let modelSpend = keyInfo?.info?.model_spend
-          if (!modelSpend || Object.keys(modelSpend).length === 0) {
-            // Fetch lifetime spend logs from key creation date
-            const keyCreatedAt = keyInfo?.info?.created_at
-            const lifetimeStart = keyCreatedAt
-              ? keyCreatedAt.slice(0, 10)
-              : "2020-01-01"
-            const lifetimeLogs = await fetchSpendLogs(config, lifetimeStart, endDate)
-            const aggregated: Record<string, number> = {}
-            for (const entry of lifetimeLogs) {
-              const models = (entry as { models?: Record<string, number> }).models
-              if (models) {
-                for (const [model, spend] of Object.entries(models)) {
-                  aggregated[model] = (aggregated[model] || 0) + spend
-                }
+            // Budget info
+            if (keyInfo?.info?.max_budget) {
+              const pct = ((lifetimeSpend / keyInfo.info.max_budget) * 100).toFixed(1)
+              lines.push("")
+              lines.push(
+                `Budget: ${formatCost(keyInfo.info.max_budget)} | Used: ${pct}%`
+              )
+              if (keyInfo.info.budget_reset_at) {
+                lines.push(`Resets: ${keyInfo.info.budget_reset_at}`)
               }
             }
-            if (Object.keys(aggregated).length > 0) {
-              modelSpend = aggregated
+
+            // Per-model breakdown: prefer key info, fall back to lifetime spend logs
+            let modelSpend = keyInfo?.info?.model_spend
+            if (!modelSpend || Object.keys(modelSpend).length === 0) {
+              // Fetch lifetime spend logs from key creation date
+              const keyCreatedAt = keyInfo?.info?.created_at
+              const lifetimeStart = keyCreatedAt
+                ? keyCreatedAt.slice(0, 10)
+                : "2020-01-01"
+              const lifetimeLogs = await fetchSpendLogs(config, lifetimeStart, endDate)
+              const aggregated: Record<string, number> = {}
+              for (const entry of lifetimeLogs) {
+                const models = (entry as { models?: Record<string, number> }).models
+                if (models) {
+                  for (const [model, spend] of Object.entries(models)) {
+                    aggregated[model] = (aggregated[model] || 0) + spend
+                  }
+                }
+              }
+              if (Object.keys(aggregated).length > 0) {
+                modelSpend = aggregated
+              }
             }
-          }
 
-          if (modelSpend && Object.keys(modelSpend).length > 0) {
-            lines.push("")
-            lines.push("### Per-Model (Lifetime)")
-            lines.push("| Model                                    | Spend         |")
-            lines.push("|------------------------------------------|---------------|")
+            if (modelSpend && Object.keys(modelSpend).length > 0) {
+              lines.push("")
+              lines.push("### Per-Model (Lifetime)")
+              lines.push("| Model                                    | Spend         |")
+              lines.push("|------------------------------------------|---------------|")
 
-            const sorted = Object.entries(modelSpend).sort(
-              ([, a], [, b]) => b - a
-            )
-            for (const [model, spend] of sorted) {
+              const sorted = Object.entries(modelSpend).sort(
+                ([, a], [, b]) => b - a
+              )
+              for (const [model, spend] of sorted) {
+                lines.push(
+                  `| ${model.padEnd(40)} | ${formatCost(spend).padEnd(13)} |`
+                )
+              }
+            }
+
+            // Note about data source
+            if (!keyInfo && todayLogs.length === 0) {
+              lines.push("")
               lines.push(
-                `| ${model.padEnd(40)} | ${formatCost(spend).padEnd(13)} |`
+                "_Could not reach LiteLLM spend endpoints. Verify your API key has access._"
               )
             }
-          }
 
-          // Note about data source
-          if (!keyInfo && todayLogs.length === 0) {
-            lines.push("")
-            lines.push(
-              "_Could not reach LiteLLM spend endpoints. Verify your API key has access._"
-            )
+            return lines.join("\n")
+          } catch (err) {
+            return `Error fetching spend data: ${err instanceof Error ? err.message : String(err)}`
           }
-
-          return lines.join("\n")
         },
       }),
 
@@ -422,106 +426,110 @@ export const LiteLLMCostPlugin: Plugin = async ({ client }, options?) => {
             return "Error: No LITELLM_API_KEY configured. Cannot query server-side spend."
           }
 
-          const maskedKey = maskApiKey(config.apiKey)
-          const lines: string[] = [
-            `## Per-Model Server Spend (Key: ${maskedKey})`,
-            "",
-          ]
+          try {
+            const maskedKey = maskApiKey(config.apiKey)
+            const lines: string[] = [
+              `## Per-Model Server Spend (Key: ${maskedKey})`,
+              "",
+            ]
 
-          // Fetch key info for lifetime model breakdown
-          const keyInfo = await fetchKeyInfo(config)
+            // Fetch key info for lifetime model breakdown
+            const keyInfo = await fetchKeyInfo(config)
 
-          // Fetch spend logs for period breakdowns
-          const todayKey = getTodayKey()
-          const weekStart = getWeekStartKey()
-          const monthStart = getMonthStartKey()
-          const tomorrow = new Date()
-          tomorrow.setDate(tomorrow.getDate() + 1)
-          const endDate = tomorrow.toISOString().slice(0, 10)
+            // Fetch spend logs for period breakdowns
+            const todayKey = getTodayKey()
+            const weekStart = getWeekStartKey()
+            const monthStart = getMonthStartKey()
+            const tomorrow = new Date()
+            tomorrow.setDate(tomorrow.getDate() + 1)
+            const endDate = tomorrow.toISOString().slice(0, 10)
 
-          const [todayLogs, weekLogs, monthLogs] = await Promise.all([
-            fetchSpendLogs(config, todayKey, endDate),
-            fetchSpendLogs(config, weekStart, endDate),
-            fetchSpendLogs(config, monthStart, endDate),
-          ])
+            const [todayLogs, weekLogs, monthLogs] = await Promise.all([
+              fetchSpendLogs(config, todayKey, endDate),
+              fetchSpendLogs(config, weekStart, endDate),
+              fetchSpendLogs(config, monthStart, endDate),
+            ])
 
-          // Aggregate per-model spend from logs
-          type LogEntry = { models?: Record<string, number>; spend?: number }
-          function aggregateModels(
-            logs: LogEntry[]
-          ): Record<string, number> {
-            const result: Record<string, number> = {}
-            for (const entry of logs) {
-              if (entry.models) {
-                for (const [model, spend] of Object.entries(entry.models)) {
-                  result[model] = (result[model] || 0) + spend
+            // Aggregate per-model spend from logs
+            type LogEntry = { models?: Record<string, number>; spend?: number }
+            function aggregateModels(
+              logs: LogEntry[]
+            ): Record<string, number> {
+              const result: Record<string, number> = {}
+              for (const entry of logs) {
+                if (entry.models) {
+                  for (const [model, spend] of Object.entries(entry.models)) {
+                    result[model] = (result[model] || 0) + spend
+                  }
                 }
               }
+              return result
             }
-            return result
-          }
 
-          const todayModels = aggregateModels(todayLogs as LogEntry[])
-          const weekModels = aggregateModels(weekLogs as LogEntry[])
-          const monthModels = aggregateModels(monthLogs as LogEntry[])
+            const todayModels = aggregateModels(todayLogs as LogEntry[])
+            const weekModels = aggregateModels(weekLogs as LogEntry[])
+            const monthModels = aggregateModels(monthLogs as LogEntry[])
 
-          // Lifetime per-model: prefer key info, fall back to spend logs from key creation
-          let lifetimeModels = keyInfo?.info?.model_spend || {}
-          if (Object.keys(lifetimeModels).length === 0) {
-            const keyCreatedAt = keyInfo?.info?.created_at
-            const lifetimeStart = keyCreatedAt
-              ? keyCreatedAt.slice(0, 10)
-              : "2020-01-01"
-            const lifetimeLogs = await fetchSpendLogs(config, lifetimeStart, endDate)
-            lifetimeModels = aggregateModels(lifetimeLogs as LogEntry[])
-          }
+            // Lifetime per-model: prefer key info, fall back to spend logs from key creation
+            let lifetimeModels = keyInfo?.info?.model_spend || {}
+            if (Object.keys(lifetimeModels).length === 0) {
+              const keyCreatedAt = keyInfo?.info?.created_at
+              const lifetimeStart = keyCreatedAt
+                ? keyCreatedAt.slice(0, 10)
+                : "2020-01-01"
+              const lifetimeLogs = await fetchSpendLogs(config, lifetimeStart, endDate)
+              lifetimeModels = aggregateModels(lifetimeLogs as LogEntry[])
+            }
 
-          // Collect all model names across all periods
-          const allModels = new Set<string>([
-            ...Object.keys(todayModels),
-            ...Object.keys(weekModels),
-            ...Object.keys(monthModels),
-            ...Object.keys(lifetimeModels),
-          ])
+            // Collect all model names across all periods
+            const allModels = new Set<string>([
+              ...Object.keys(todayModels),
+              ...Object.keys(weekModels),
+              ...Object.keys(monthModels),
+              ...Object.keys(lifetimeModels),
+            ])
 
-          if (allModels.size === 0) {
-            lines.push("_No per-model spend data available._")
+            if (allModels.size === 0) {
+              lines.push("_No per-model spend data available._")
+              return lines.join("\n")
+            }
+
+            // Sort models by month spend (descending), then lifetime
+            const sortedModels = [...allModels].sort((a, b) => {
+              const aSpend = monthModels[a] || lifetimeModels[a] || 0
+              const bSpend = monthModels[b] || lifetimeModels[b] || 0
+              return bSpend - aSpend
+            })
+
+            lines.push(
+              "| Model                                    | Today         | This Week     | This Month    | Lifetime      |"
+            )
+            lines.push(
+              "|------------------------------------------|---------------|---------------|---------------|---------------|"
+            )
+
+            for (const model of sortedModels) {
+              const today = todayModels[model] || 0
+              const week = weekModels[model] || 0
+              const month = monthModels[model] || 0
+              const lifetime = lifetimeModels[model] || 0
+              lines.push(
+                `| ${model.padEnd(40)} | ${formatCost(today).padEnd(13)} | ${formatCost(week).padEnd(13)} | ${formatCost(month).padEnd(13)} | ${formatCost(lifetime).padEnd(13)} |`
+              )
+            }
+
+            // Note about data source
+            if (!keyInfo && Object.keys(todayModels).length === 0) {
+              lines.push("")
+              lines.push(
+                "_Could not reach LiteLLM spend endpoints. Verify your API key has access._"
+              )
+            }
+
             return lines.join("\n")
+          } catch (err) {
+            return `Error fetching per-model spend data: ${err instanceof Error ? err.message : String(err)}`
           }
-
-          // Sort models by month spend (descending), then lifetime
-          const sortedModels = [...allModels].sort((a, b) => {
-            const aSpend = monthModels[a] || lifetimeModels[a] || 0
-            const bSpend = monthModels[b] || lifetimeModels[b] || 0
-            return bSpend - aSpend
-          })
-
-          lines.push(
-            "| Model                                    | Today         | This Week     | This Month    | Lifetime      |"
-          )
-          lines.push(
-            "|------------------------------------------|---------------|---------------|---------------|---------------|"
-          )
-
-          for (const model of sortedModels) {
-            const today = todayModels[model] || 0
-            const week = weekModels[model] || 0
-            const month = monthModels[model] || 0
-            const lifetime = lifetimeModels[model] || 0
-            lines.push(
-              `| ${model.padEnd(40)} | ${formatCost(today).padEnd(13)} | ${formatCost(week).padEnd(13)} | ${formatCost(month).padEnd(13)} | ${formatCost(lifetime).padEnd(13)} |`
-            )
-          }
-
-          // Note about data source
-          if (!keyInfo && Object.keys(todayModels).length === 0) {
-            lines.push("")
-            lines.push(
-              "_Could not reach LiteLLM spend endpoints. Verify your API key has access._"
-            )
-          }
-
-          return lines.join("\n")
         },
       }),
     },
