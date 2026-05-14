@@ -1,5 +1,6 @@
-import { join } from "path"
+import { join, dirname } from "path"
 import { homedir } from "os"
+import { readFileSync, writeFileSync, mkdirSync, renameSync } from "fs"
 
 // --- Types ---
 
@@ -218,7 +219,6 @@ function emptyCostData(): CostData {
 export function loadCostData(filePath?: string): CostData {
   const path = filePath || COST_FILE_PATH
   try {
-    const { readFileSync } = require("fs")
     const text = readFileSync(path, "utf-8")
     const data = JSON.parse(text) as CostData
     // Basic validation
@@ -251,9 +251,6 @@ export function loadCostData(filePath?: string): CostData {
 export function saveCostData(data: CostData, filePath?: string): void {
   const path = filePath || COST_FILE_PATH
   try {
-    const { mkdirSync, writeFileSync, renameSync } = require("fs")
-    const { dirname } = require("path")
-
     // Ensure directory exists
     mkdirSync(dirname(path), { recursive: true })
 
